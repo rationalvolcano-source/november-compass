@@ -1,10 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.50.0";
-import { getFeedsForCategory, CATEGORY_FEEDS } from "../_shared/rss-sources.ts";
+import { getFeedsForCategory, Feed } from "../_shared/rss-sources.ts";
 import { 
   fetchAndParseFeed, 
   createItemHash, 
-  filterByKeywords, 
   filterByDateRange,
   RawFeedItem 
 } from "../_shared/rss-parser.ts";
@@ -14,85 +13,113 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const MAX_ITEMS_PER_CATEGORY = 12;
+const MAX_ITEMS_PER_CATEGORY = 25;
+const FEED_CONCURRENCY_LIMIT = 4;
 
-// Month number to name mapping
-const MONTH_NAMES = [
-  '', 'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December'
-];
-
-// LLM fallback for when RSS fails
-async function fetchWithLLM(
-  category: string, 
-  section: string,
-  month: number, 
-  year: number
+/**
+ * Fetch feeds with concurrency limit
+ */
+async function fetchFeedsWithConcurrency(
+  feeds: Feed[],
+  limit: number
 ): Promise<RawFeedItem[]> {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) {
-    console.warn("No LOVABLE_API_KEY for LLM fallback");
-    return [];
-  }
-
-  const monthName = MONTH_NAMES[month] || 'January';
+  const results: RawFeedItem[] = [];
   
-  const systemPrompt = `You are an expert researcher compiling Indian current affairs for competitive exams.
-Return a JSON array of news items from ${monthName} ${year} for the category: "${category}" (section: ${section}).
-
-Each item must have:
-- title: Clear headline (string)
-- date: Approximate date like "15 ${monthName} ${year}" or "Early ${monthName} ${year}"
-- snippet: 1-2 sentence description
-- source: "AI Generated"
-
-Return 8-12 items as a valid JSON array. If no relevant news, return [].
-Output ONLY the JSON array, no extra text.`;
-
-  try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `List important ${category} news from India for ${monthName} ${year}. JSON array only.` },
-        ],
-        temperature: 0.5,
-        max_tokens: 2000,
-      }),
-    });
-
-    if (!response.ok) {
-      console.warn(`LLM fallback failed: ${response.status}`);
-      return [];
-    }
-
-    const data = await response.json();
-    const content = data?.choices?.[0]?.message?.content ?? "";
-
-    // Parse JSON from response
-    const jsonMatch = content.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return [];
-
-    const items = JSON.parse(jsonMatch[0]);
+  // Process feeds in batches
+  for (let i = 0; i < feeds.length; i += limit) {
+    const batch = feeds.slice(i, i + limit);
+    const batchPromises = batch.map(feed => 
+      fetchAndParseFeed(feed.url, feed.name)
+        .then(items => items.map(item => ({
+          ...item,
+          weight: feed.weight || 5, // Attach weight for ranking
+        })))
+        .catch(err => {
+          console.warn(`Failed to fetch ${feed.name}: ${err.message}`);
+          return [];
+        })
+    );
     
-    return items.map((item: any) => ({
-      title: item.title || item.headline || "",
-      url: "",
-      source: "AI Generated",
-      publishedAt: null,
-      snippet: item.snippet || item.description || "",
-    })).filter((item: RawFeedItem) => item.title);
-
-  } catch (error) {
-    console.error("LLM fallback error:", error);
-    return [];
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults.flat());
   }
+  
+  return results;
+}
+
+/**
+ * Normalize URL for deduplication (remove tracking params, fragments)
+ */
+function normalizeUrl(url: string): string {
+  if (!url) return '';
+  try {
+    const urlObj = new URL(url);
+    // Remove common tracking params
+    const trackingParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'ref', 'source'];
+    trackingParams.forEach(param => urlObj.searchParams.delete(param));
+    urlObj.hash = '';
+    return urlObj.toString().toLowerCase();
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+/**
+ * Enhanced deduplication with URL normalization
+ */
+function deduplicateItems(items: RawFeedItem[]): RawFeedItem[] {
+  const seenHashes = new Set<string>();
+  const seenUrls = new Set<string>();
+  const unique: RawFeedItem[] = [];
+  
+  for (const item of items) {
+    const hash = createItemHash(item.title, item.url);
+    const normalizedUrl = normalizeUrl(item.url);
+    
+    // Check both hash and normalized URL
+    if (!seenHashes.has(hash) && (!normalizedUrl || !seenUrls.has(normalizedUrl))) {
+      seenHashes.add(hash);
+      if (normalizedUrl) seenUrls.add(normalizedUrl);
+      unique.push(item);
+    }
+  }
+  
+  return unique;
+}
+
+/**
+ * Rank items by source weight and recency
+ */
+function rankItems(items: RawFeedItem[], keywords: string[]): RawFeedItem[] {
+  const lowerKeywords = keywords.map(k => k.toLowerCase());
+  
+  return items.sort((a, b) => {
+    // 1. Prefer primary sources (higher weight)
+    const weightA = (a as any).weight || 5;
+    const weightB = (b as any).weight || 5;
+    if (weightB !== weightA) return weightB - weightA;
+    
+    // 2. Prefer items with longer snippets
+    const snippetLenA = (a.snippet || '').length;
+    const snippetLenB = (b.snippet || '').length;
+    if (Math.abs(snippetLenA - snippetLenB) > 50) {
+      return snippetLenB - snippetLenA;
+    }
+    
+    // 3. Prefer items matching category keywords
+    if (lowerKeywords.length > 0) {
+      const textA = (a.title + ' ' + a.snippet).toLowerCase();
+      const textB = (b.title + ' ' + b.snippet).toLowerCase();
+      const matchesA = lowerKeywords.filter(k => textA.includes(k)).length;
+      const matchesB = lowerKeywords.filter(k => textB.includes(k)).length;
+      if (matchesB !== matchesA) return matchesB - matchesA;
+    }
+    
+    // 4. Prefer more recent items
+    const dateA = a.publishedAt?.getTime() || 0;
+    const dateB = b.publishedAt?.getTime() || 0;
+    return dateB - dateA;
+  });
 }
 
 serve(async (req) => {
@@ -115,7 +142,35 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Check cache first (unless forceRefresh)
+    // Determine if this is current month
+    const now = new Date();
+    const isCurrentMonth = month === (now.getMonth() + 1) && year === now.getFullYear();
+
+    // For older months: ONLY query DB (RSS won't have historical data)
+    if (!isCurrentMonth && !forceRefresh) {
+      const { data: cachedItems } = await supabase
+        .from("draft_items")
+        .select("*")
+        .eq("section", section)
+        .eq("category", category)
+        .eq("month", month)
+        .eq("year", year)
+        .order("published_at", { ascending: false, nullsFirst: false })
+        .limit(MAX_ITEMS_PER_CATEGORY);
+
+      console.log(`Historical month ${month}/${year}: returning ${cachedItems?.length || 0} cached items`);
+      return new Response(
+        JSON.stringify({ 
+          items: cachedItems || [], 
+          source: "cache",
+          count: cachedItems?.length || 0,
+          message: isCurrentMonth ? undefined : "Historical months use cached data only. Use daily ingestion to build archive."
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Check cache first for current month (unless forceRefresh)
     if (!forceRefresh) {
       const { data: cachedItems } = await supabase
         .from("draft_items")
@@ -127,7 +182,7 @@ serve(async (req) => {
         .order("published_at", { ascending: false, nullsFirst: false })
         .limit(MAX_ITEMS_PER_CATEGORY);
 
-      if (cachedItems && cachedItems.length > 0) {
+      if (cachedItems && cachedItems.length >= 5) {
         console.log(`Cache hit for ${section}/${category} ${month}/${year}: ${cachedItems.length} items`);
         return new Response(
           JSON.stringify({ 
@@ -141,61 +196,44 @@ serve(async (req) => {
     }
 
     // Get feeds for this category
-    const categoryFeeds = getFeedsForCategory(section, category);
-    const feeds = categoryFeeds?.feeds || [];
-    const keywords = categoryFeeds?.keywords || [];
+    const categoryConfig = getFeedsForCategory(section, category);
+    const feeds = categoryConfig?.feeds || [];
+    const keywords = categoryConfig?.keywords || [];
 
-    // Fetch all feeds in parallel
-    console.log(`Fetching ${feeds.length} feeds for ${section}/${category}`);
-    const feedPromises = feeds.map(feed => 
-      fetchAndParseFeed(feed.url, feed.name)
-    );
-    const feedResults = await Promise.all(feedPromises);
+    if (feeds.length === 0) {
+      console.warn(`No feeds configured for ${section}/${category}`);
+      return new Response(
+        JSON.stringify({ 
+          items: [], 
+          source: "none",
+          count: 0,
+          error: "No feeds configured for this category"
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    // Combine all items
-    let allItems: RawFeedItem[] = feedResults.flat();
-    console.log(`Fetched ${allItems.length} raw items from feeds`);
+    // Fetch all feeds with concurrency limit
+    console.log(`Fetching ${feeds.length} feeds for ${section}/${category} with concurrency ${FEED_CONCURRENCY_LIMIT}`);
+    let allItems = await fetchFeedsWithConcurrency(feeds, FEED_CONCURRENCY_LIMIT);
+    console.log(`Fetched ${allItems.length} raw items from ${feeds.length} feeds`);
 
-    // Filter by date range (skip for current month since RSS has recent items)
-    const now = new Date();
-    const isCurrentMonth = month === (now.getMonth() + 1) && year === now.getFullYear();
-    
-    if (!isCurrentMonth) {
+    // Filter by date range for current month (skip for forceRefresh to get latest)
+    if (!forceRefresh) {
       allItems = filterByDateRange(allItems, month, year);
       console.log(`After date filter: ${allItems.length} items`);
-    } else {
-      console.log(`Skipping date filter for current month, keeping ${allItems.length} items`);
     }
 
-    // Skip keyword filtering - RSS sources are already category-specific
-    // Keywords were filtering out too many valid items
-    console.log(`Proceeding with ${allItems.length} items (keyword filter disabled)`);
-
-    // Deduplicate by hash
-    const seenHashes = new Set<string>();
-    let uniqueItems: RawFeedItem[] = [];
-    
-    for (const item of allItems) {
-      const hash = createItemHash(item.title, item.url);
-      if (!seenHashes.has(hash)) {
-        seenHashes.add(hash);
-        uniqueItems.push(item);
-      }
-    }
+    // Deduplicate
+    let uniqueItems = deduplicateItems(allItems);
     console.log(`After deduplication: ${uniqueItems.length} items`);
 
-    // If RSS returned nothing, use LLM fallback
-    let source = "rss";
-    if (uniqueItems.length === 0) {
-      console.log("RSS returned 0 items, trying LLM fallback...");
-      const categoryName = categoryFeeds?.category || category;
-      uniqueItems = await fetchWithLLM(categoryName, section, month, year);
-      source = "llm";
-      console.log(`LLM fallback returned ${uniqueItems.length} items`);
-    }
+    // Rank items (primary sources first, longer snippets, keyword matches)
+    uniqueItems = rankItems(uniqueItems, keywords);
 
     // Limit to max items
     const limitedItems = uniqueItems.slice(0, MAX_ITEMS_PER_CATEGORY);
+    console.log(`Returning top ${limitedItems.length} items`);
 
     // Prepare for database insertion
     const dbItems = limitedItems.map(item => ({
@@ -207,7 +245,7 @@ serve(async (req) => {
       url: item.url || null,
       source: item.source,
       published_at: item.publishedAt?.toISOString() || null,
-      snippet: item.snippet,
+      snippet: item.snippet || null,
       hash: createItemHash(item.title, item.url || item.title),
     }));
 
@@ -239,9 +277,10 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         items: finalItems || [], 
-        source,
+        source: "rss",
         count: finalItems?.length || 0,
-        feedsQueried: feeds.length
+        feedsQueried: feeds.length,
+        feedNames: feeds.map(f => f.name)
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

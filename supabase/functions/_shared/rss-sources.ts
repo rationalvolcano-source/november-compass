@@ -1,596 +1,549 @@
 /**
  * RSS/Feed source mapping for news acquisition
- * Maps categories to their respective RSS feeds and government sources
+ * Multi-source feeds per category for breadth without LLM cost
  */
 
-export interface FeedSource {
-  url: string;
+export interface Feed {
+  id: string;
   name: string;
-  type: 'rss' | 'atom' | 'json';
-  priority: number; // 1 = highest
+  url: string;
+  lang: "en" | "hi" | "mixed";
+  weight: number;     // Higher = more trusted/relevant (1-10)
+  tags?: string[];    // Quick categorization
 }
 
-export interface CategoryFeeds {
+export interface CategoryConfig {
   section: string;
   category: string;
-  feeds: FeedSource[];
-  keywords: string[]; // For filtering/categorization
+  feeds: Feed[];
+  keywords: string[]; // For optional filtering
 }
 
-// PIB (Press Information Bureau) RSS feeds
+// =============================================================================
+// PRIMARY SOURCES (Government - High Signal)
+// =============================================================================
+
+// PIB (Press Information Bureau) - Ministry-specific feeds
+// URL Structure: https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid={ministry_id}
 // Lang=1 is English, Lang=2 is Hindi
-// Regid=1 is PIB Delhi (Central/Main English releases)
-const PIB_BASE = 'https://pib.gov.in/RssMain.aspx';
-const PIB_FEEDS = {
-  all: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  defence: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  finance: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  agriculture: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  environment: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  education: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  health: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  science: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  commerce: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  external: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
-  sports: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+// Regid varies by ministry/region
+const PIB_BASE = 'https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1';
+const PIB = {
+  // Central/Main releases
+  delhi: { id: 'pib-delhi', name: 'PIB Delhi', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 10 },
+  
+  // Ministry-specific (these use different Regid values)
+  defence: { id: 'pib-defence', name: 'PIB Defence', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['defence', 'military'] },
+  finance: { id: 'pib-finance', name: 'PIB Finance', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['finance', 'economy'] },
+  external: { id: 'pib-external', name: 'PIB External Affairs', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['international', 'diplomacy'] },
+  commerce: { id: 'pib-commerce', name: 'PIB Commerce', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['trade', 'business'] },
+  education: { id: 'pib-education', name: 'PIB Education', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['education'] },
+  health: { id: 'pib-health', name: 'PIB Health', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['health'] },
+  environment: { id: 'pib-environment', name: 'PIB Environment', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['environment'] },
+  science: { id: 'pib-science', name: 'PIB Science', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['science', 'tech'] },
+  agriculture: { id: 'pib-agriculture', name: 'PIB Agriculture', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['agriculture'] },
+  sports: { id: 'pib-sports', name: 'PIB Sports', url: `${PIB_BASE}&Regid=1`, lang: 'en' as const, weight: 9, tags: ['sports'] },
 };
 
-// RBI RSS feeds
-const RBI_FEEDS = {
-  pressReleases: 'https://rbi.org.in/Scripts/BS_PressReleasesRssData.aspx',
-  notifications: 'https://rbi.org.in/Scripts/BS_NotificationsRssData.aspx',
-  circulars: 'https://rbi.org.in/Scripts/BS_CircularRssData.aspx',
+// RBI (Reserve Bank of India)
+const RBI = {
+  press: { id: 'rbi-press', name: 'RBI Press Releases', url: 'https://rbi.org.in/Scripts/BS_PressReleasesRssData.aspx', lang: 'en' as const, weight: 10, tags: ['banking', 'policy'] },
+  notifications: { id: 'rbi-notif', name: 'RBI Notifications', url: 'https://rbi.org.in/Scripts/BS_NotificationsRssData.aspx', lang: 'en' as const, weight: 9, tags: ['banking', 'regulation'] },
+  circulars: { id: 'rbi-circ', name: 'RBI Circulars', url: 'https://rbi.org.in/Scripts/BS_CircularRssData.aspx', lang: 'en' as const, weight: 8, tags: ['banking'] },
 };
 
-// SEBI feeds (if available)
-const SEBI_FEEDS = {
-  pressReleases: 'https://www.sebi.gov.in/sebiweb/other/OtherAction.do?doGet=yes&method=getRSSFeed',
+// SEBI
+const SEBI = {
+  press: { id: 'sebi-press', name: 'SEBI Press', url: 'https://www.sebi.gov.in/sebiweb/other/OtherAction.do?doGet=yes&method=getRSSFeed', lang: 'en' as const, weight: 10, tags: ['markets', 'regulation'] },
 };
 
 // PRS Legislative Research
-const PRS_FEEDS = {
-  bills: 'https://prsindia.org/billtrack/rss',
-  legislative: 'https://prsindia.org/rss',
+const PRS = {
+  bills: { id: 'prs-bills', name: 'PRS Bills', url: 'https://prsindia.org/billtrack/rss', lang: 'en' as const, weight: 10, tags: ['legislation', 'parliament'] },
+  general: { id: 'prs-general', name: 'PRS India', url: 'https://prsindia.org/rss', lang: 'en' as const, weight: 9, tags: ['policy', 'legislation'] },
 };
 
-// Category to feeds mapping
-export const CATEGORY_FEEDS: CategoryFeeds[] = [
-  // National Affairs
+// =============================================================================
+// SECONDARY SOURCES (National News - Broad Coverage)
+// =============================================================================
+
+const NEWS = {
+  // The Hindu sections
+  hinduNational: { id: 'hindu-national', name: 'The Hindu National', url: 'https://www.thehindu.com/news/national/feeder/default.rss', lang: 'en' as const, weight: 8, tags: ['national'] },
+  hinduInternational: { id: 'hindu-intl', name: 'The Hindu International', url: 'https://www.thehindu.com/news/international/feeder/default.rss', lang: 'en' as const, weight: 8, tags: ['international'] },
+  hinduBusiness: { id: 'hindu-biz', name: 'The Hindu Business', url: 'https://www.thehindu.com/business/feeder/default.rss', lang: 'en' as const, weight: 7, tags: ['business', 'economy'] },
+  hinduSciTech: { id: 'hindu-scitech', name: 'The Hindu Sci-Tech', url: 'https://www.thehindu.com/sci-tech/feeder/default.rss', lang: 'en' as const, weight: 7, tags: ['science', 'tech'] },
+  hinduSports: { id: 'hindu-sports', name: 'The Hindu Sports', url: 'https://www.thehindu.com/sport/feeder/default.rss', lang: 'en' as const, weight: 7, tags: ['sports'] },
+  
+  // Indian Express
+  ieNational: { id: 'ie-national', name: 'Indian Express India', url: 'https://indianexpress.com/section/india/feed/', lang: 'en' as const, weight: 8, tags: ['national'] },
+  ieBusiness: { id: 'ie-business', name: 'Indian Express Business', url: 'https://indianexpress.com/section/business/feed/', lang: 'en' as const, weight: 7, tags: ['business'] },
+  ieSports: { id: 'ie-sports', name: 'Indian Express Sports', url: 'https://indianexpress.com/section/sports/feed/', lang: 'en' as const, weight: 7, tags: ['sports'] },
+  ieTech: { id: 'ie-tech', name: 'Indian Express Tech', url: 'https://indianexpress.com/section/technology/feed/', lang: 'en' as const, weight: 7, tags: ['tech'] },
+  
+  // LiveMint
+  mintPolitics: { id: 'mint-politics', name: 'LiveMint Politics', url: 'https://www.livemint.com/rss/politics', lang: 'en' as const, weight: 7, tags: ['politics'] },
+  mintEconomy: { id: 'mint-economy', name: 'LiveMint Economy', url: 'https://www.livemint.com/rss/economy', lang: 'en' as const, weight: 8, tags: ['economy'] },
+  mintCompanies: { id: 'mint-companies', name: 'LiveMint Companies', url: 'https://www.livemint.com/rss/companies', lang: 'en' as const, weight: 7, tags: ['business'] },
+  
+  // Business Standard
+  bsEconomy: { id: 'bs-economy', name: 'Business Standard Economy', url: 'https://www.business-standard.com/rss/economy-policy-104.rss', lang: 'en' as const, weight: 8, tags: ['economy', 'policy'] },
+  bsFinance: { id: 'bs-finance', name: 'Business Standard Finance', url: 'https://www.business-standard.com/rss/finance-102.rss', lang: 'en' as const, weight: 8, tags: ['finance', 'banking'] },
+  bsMarkets: { id: 'bs-markets', name: 'Business Standard Markets', url: 'https://www.business-standard.com/rss/markets-103.rss', lang: 'en' as const, weight: 7, tags: ['markets'] },
+};
+
+// =============================================================================
+// SECTORAL SOURCES
+// =============================================================================
+
+const SECTORAL = {
+  // Environment
+  downToEarth: { id: 'dte', name: 'Down To Earth', url: 'https://www.downtoearth.org.in/rss.xml', lang: 'en' as const, weight: 9, tags: ['environment', 'climate'] },
+};
+
+// =============================================================================
+// CATEGORY MAPPINGS - Multiple feeds per category
+// =============================================================================
+
+export const CATEGORY_FEEDS: CategoryConfig[] = [
+  // =========== NATIONAL AFFAIRS ===========
   {
     section: 'national',
     category: 'cabinet-approvals',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['cabinet', 'approval', 'decision', 'union cabinet', 'ccea'],
+    feeds: [PIB.delhi, NEWS.hinduNational, NEWS.ieNational, NEWS.mintPolitics],
+    keywords: ['cabinet', 'approval', 'decision', 'union cabinet', 'ccea', 'pm modi'],
   },
   {
     section: 'national',
     category: 'government-schemes',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['scheme', 'yojana', 'mission', 'programme', 'initiative', 'launch'],
+    feeds: [PIB.delhi, NEWS.hinduNational, NEWS.ieNational],
+    keywords: ['scheme', 'yojana', 'mission', 'programme', 'initiative', 'launch', 'welfare'],
   },
   {
     section: 'national',
     category: 'launches-inaugurations',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['launch', 'inaugurate', 'unveil', 'dedicate', 'foundation stone'],
+    feeds: [PIB.delhi, NEWS.hinduNational, NEWS.ieNational],
+    keywords: ['launch', 'inaugurate', 'unveil', 'dedicate', 'foundation stone', 'commence'],
   },
   {
     section: 'national',
     category: 'statewise-news',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['state', 'chief minister', 'cm', 'assembly'],
+    feeds: [PIB.delhi, NEWS.hinduNational, NEWS.ieNational],
+    keywords: ['state', 'chief minister', 'cm', 'assembly', 'governor'],
   },
   {
     section: 'national',
     category: 'festivals',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['festival', 'celebration', 'diwali', 'holi', 'eid', 'christmas', 'pongal'],
+    feeds: [PIB.delhi, NEWS.hinduNational],
+    keywords: ['festival', 'celebration', 'diwali', 'holi', 'eid', 'christmas', 'pongal', 'onam'],
   },
   {
     section: 'national',
     category: 'other-national',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
+    feeds: [PIB.delhi, NEWS.hinduNational, NEWS.ieNational, NEWS.mintPolitics],
     keywords: [],
   },
 
-  // International Affairs
+  // =========== INTERNATIONAL AFFAIRS ===========
   {
     section: 'international',
     category: 'visits-to-india',
-    feeds: [
-      { url: PIB_FEEDS.external, name: 'PIB External', type: 'rss', priority: 1 },
-    ],
-    keywords: ['visit', 'arrival', 'state visit', 'official visit', 'india tour'],
+    feeds: [PIB.external, NEWS.hinduInternational, NEWS.hinduNational],
+    keywords: ['visit', 'arrival', 'state visit', 'official visit', 'india tour', 'bilateral'],
   },
   {
     section: 'international',
     category: 'foreign-visits',
-    feeds: [
-      { url: PIB_FEEDS.external, name: 'PIB External', type: 'rss', priority: 1 },
-    ],
-    keywords: ['pm visit', 'president visit', 'minister visit', 'foreign tour'],
+    feeds: [PIB.external, NEWS.hinduInternational],
+    keywords: ['pm visit', 'president visit', 'minister visit', 'foreign tour', 'abroad'],
   },
   {
     section: 'international',
     category: 'bilateral-multilateral',
-    feeds: [
-      { url: PIB_FEEDS.external, name: 'PIB External', type: 'rss', priority: 1 },
-    ],
-    keywords: ['bilateral', 'multilateral', 'g20', 'brics', 'quad', 'asean', 'saarc', 'un'],
+    feeds: [PIB.external, NEWS.hinduInternational],
+    keywords: ['bilateral', 'multilateral', 'g20', 'brics', 'quad', 'asean', 'saarc', 'un', 'summit'],
   },
   {
     section: 'international',
     category: 'international-news',
-    feeds: [
-      { url: PIB_FEEDS.external, name: 'PIB External', type: 'rss', priority: 1 },
-    ],
+    feeds: [PIB.external, NEWS.hinduInternational],
     keywords: [],
   },
 
-  // Banking & Finance
+  // =========== BANKING & FINANCE ===========
   {
     section: 'banking-finance',
     category: 'rbi-news',
-    feeds: [
-      { url: RBI_FEEDS.pressReleases, name: 'RBI Press', type: 'rss', priority: 1 },
-      { url: RBI_FEEDS.notifications, name: 'RBI Notifications', type: 'rss', priority: 2 },
-      { url: RBI_FEEDS.circulars, name: 'RBI Circulars', type: 'rss', priority: 3 },
-    ],
-    keywords: ['rbi', 'reserve bank', 'monetary policy', 'repo rate', 'inflation'],
+    feeds: [RBI.press, RBI.notifications, RBI.circulars, NEWS.bsFinance, NEWS.mintEconomy],
+    keywords: ['rbi', 'reserve bank', 'monetary policy', 'repo rate', 'inflation', 'interest rate'],
   },
   {
     section: 'banking-finance',
     category: 'sebi-news',
-    feeds: [
-      { url: SEBI_FEEDS.pressReleases, name: 'SEBI Press', type: 'rss', priority: 1 },
-    ],
-    keywords: ['sebi', 'securities', 'ipo', 'listing', 'market regulation'],
+    feeds: [SEBI.press, NEWS.bsMarkets],
+    keywords: ['sebi', 'securities', 'ipo', 'listing', 'market regulation', 'stock'],
   },
   {
     section: 'banking-finance',
     category: 'bank-loans',
-    feeds: [
-      { url: RBI_FEEDS.pressReleases, name: 'RBI Press', type: 'rss', priority: 1 },
-      { url: PIB_FEEDS.finance, name: 'PIB Finance', type: 'rss', priority: 2 },
-    ],
-    keywords: ['loan', 'credit', 'lending', 'interest rate', 'borrowing'],
+    feeds: [RBI.press, PIB.finance, NEWS.bsFinance],
+    keywords: ['loan', 'credit', 'lending', 'interest rate', 'borrowing', 'npa'],
   },
   {
     section: 'banking-finance',
     category: 'bank-agreements',
-    feeds: [
-      { url: PIB_FEEDS.finance, name: 'PIB Finance', type: 'rss', priority: 1 },
-    ],
+    feeds: [PIB.finance, RBI.press, NEWS.bsFinance],
     keywords: ['agreement', 'mou', 'partnership', 'collaboration', 'bank'],
   },
   {
     section: 'banking-finance',
     category: 'other-banking',
-    feeds: [
-      { url: RBI_FEEDS.pressReleases, name: 'RBI Press', type: 'rss', priority: 1 },
-      { url: PIB_FEEDS.finance, name: 'PIB Finance', type: 'rss', priority: 2 },
-    ],
-    keywords: ['bank', 'banking', 'financial'],
+    feeds: [RBI.press, PIB.finance, NEWS.bsFinance],
+    keywords: ['bank', 'banking', 'financial', 'credit'],
   },
   {
     section: 'banking-finance',
     category: 'finance-news',
-    feeds: [
-      { url: PIB_FEEDS.finance, name: 'PIB Finance', type: 'rss', priority: 1 },
-    ],
-    keywords: ['finance', 'budget', 'tax', 'revenue', 'fiscal'],
+    feeds: [PIB.finance, NEWS.bsFinance, NEWS.mintEconomy],
+    keywords: ['finance', 'budget', 'tax', 'revenue', 'fiscal', 'gst'],
   },
 
-  // Economy & Business
+  // =========== ECONOMY & BUSINESS ===========
   {
     section: 'economy-business',
     category: 'gdp-growth',
-    feeds: [
-      { url: PIB_FEEDS.finance, name: 'PIB Finance', type: 'rss', priority: 1 },
-      { url: PIB_FEEDS.commerce, name: 'PIB Commerce', type: 'rss', priority: 2 },
-    ],
-    keywords: ['gdp', 'growth', 'economy', 'economic'],
+    feeds: [PIB.finance, NEWS.bsEconomy, NEWS.mintEconomy, NEWS.hinduBusiness],
+    keywords: ['gdp', 'growth', 'economy', 'economic', 'nso', 'statistics'],
   },
   {
     section: 'economy-business',
     category: 'economy-news',
-    feeds: [
-      { url: PIB_FEEDS.finance, name: 'PIB Finance', type: 'rss', priority: 1 },
-      { url: PIB_FEEDS.commerce, name: 'PIB Commerce', type: 'rss', priority: 2 },
-    ],
-    keywords: ['economy', 'economic', 'trade', 'export', 'import'],
+    feeds: [PIB.finance, PIB.commerce, NEWS.bsEconomy, NEWS.mintEconomy],
+    keywords: ['economy', 'economic', 'trade', 'export', 'import', 'inflation'],
   },
   {
     section: 'economy-business',
     category: 'business-news',
-    feeds: [
-      { url: PIB_FEEDS.commerce, name: 'PIB Commerce', type: 'rss', priority: 1 },
-    ],
-    keywords: ['business', 'company', 'corporate', 'industry'],
+    feeds: [PIB.commerce, NEWS.mintCompanies, NEWS.hinduBusiness, NEWS.ieBusiness],
+    keywords: ['business', 'company', 'corporate', 'industry', 'startup'],
   },
 
-  // MoUs & Agreements
+  // =========== MOUs & AGREEMENTS ===========
   {
     section: 'mous-agreements',
     category: 'mou-countries',
-    feeds: [
-      { url: PIB_FEEDS.external, name: 'PIB External', type: 'rss', priority: 1 },
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 2 },
-    ],
-    keywords: ['mou', 'agreement', 'bilateral', 'country', 'nation'],
+    feeds: [PIB.external, PIB.delhi, NEWS.hinduInternational],
+    keywords: ['mou', 'agreement', 'bilateral', 'country', 'nation', 'treaty'],
   },
   {
     section: 'mous-agreements',
     category: 'mou-states',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
+    feeds: [PIB.delhi, NEWS.hinduNational],
     keywords: ['mou', 'agreement', 'state', 'government'],
   },
   {
     section: 'mous-agreements',
     category: 'mou-organizations',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
+    feeds: [PIB.delhi, NEWS.hinduNational],
     keywords: ['mou', 'agreement', 'organization', 'institution', 'partnership'],
   },
 
-  // Appointments
+  // =========== APPOINTMENTS ===========
   {
     section: 'appointments',
     category: 'national-appointments',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['appoint', 'appointment', 'named', 'designate', 'assume office'],
+    feeds: [PIB.delhi, NEWS.hinduNational, NEWS.ieNational],
+    keywords: ['appoint', 'appointment', 'named', 'designate', 'assume office', 'chief'],
   },
   {
     section: 'appointments',
     category: 'international-appointments',
-    feeds: [
-      { url: PIB_FEEDS.external, name: 'PIB External', type: 'rss', priority: 1 },
-    ],
-    keywords: ['appoint', 'un', 'who', 'imf', 'world bank', 'international'],
+    feeds: [PIB.external, NEWS.hinduInternational],
+    keywords: ['appoint', 'un', 'who', 'imf', 'world bank', 'international', 'ambassador'],
   },
   {
     section: 'appointments',
     category: 'brand-ambassadors',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['ambassador', 'brand', 'spokesperson', 'campaign'],
+    feeds: [PIB.delhi, NEWS.hinduNational],
+    keywords: ['ambassador', 'brand', 'spokesperson', 'campaign', 'endorsement'],
   },
   {
     section: 'appointments',
     category: 'resignations',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['resign', 'retirement', 'step down', 'quit'],
+    feeds: [PIB.delhi, NEWS.hinduNational, NEWS.ieNational],
+    keywords: ['resign', 'retirement', 'step down', 'quit', 'demise', 'passes away'],
   },
 
-  // Awards & Honours
+  // =========== AWARDS & HONOURS ===========
   {
     section: 'awards',
     category: 'sports-awards',
-    feeds: [
-      { url: PIB_FEEDS.sports, name: 'PIB Sports', type: 'rss', priority: 1 },
-    ],
-    keywords: ['award', 'arjuna', 'khel ratna', 'dronacharya', 'sports award'],
+    feeds: [PIB.sports, NEWS.hinduSports, NEWS.ieSports],
+    keywords: ['award', 'arjuna', 'khel ratna', 'dronacharya', 'sports award', 'medal'],
   },
   {
     section: 'awards',
     category: 'national-awards',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['padma', 'bharat ratna', 'national award', 'civilian award'],
+    feeds: [PIB.delhi, NEWS.hinduNational],
+    keywords: ['padma', 'bharat ratna', 'national award', 'civilian award', 'gallantry'],
   },
   {
     section: 'awards',
     category: 'international-awards',
-    feeds: [
-      { url: PIB_FEEDS.external, name: 'PIB External', type: 'rss', priority: 1 },
-    ],
-    keywords: ['nobel', 'booker', 'grammy', 'oscar', 'international award'],
+    feeds: [PIB.external, NEWS.hinduInternational],
+    keywords: ['nobel', 'booker', 'grammy', 'oscar', 'international award', 'pulitzer'],
   },
   {
     section: 'awards',
     category: 'other-awards',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['award', 'honour', 'recognition', 'prize'],
+    feeds: [PIB.delhi, NEWS.hinduNational],
+    keywords: ['award', 'honour', 'recognition', 'prize', 'felicitation'],
   },
 
-  // Summits & Events
+  // =========== SUMMITS & EVENTS ===========
   {
     section: 'summits-events',
     category: 'summits',
-    feeds: [
-      { url: PIB_FEEDS.external, name: 'PIB External', type: 'rss', priority: 1 },
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 2 },
-    ],
-    keywords: ['summit', 'g20', 'brics', 'sco', 'asean', 'saarc'],
+    feeds: [PIB.external, PIB.delhi, NEWS.hinduInternational],
+    keywords: ['summit', 'g20', 'brics', 'sco', 'asean', 'saarc', 'cop'],
   },
   {
     section: 'summits-events',
     category: 'conferences',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['conference', 'conclave', 'seminar', 'symposium'],
+    feeds: [PIB.delhi, NEWS.hinduNational],
+    keywords: ['conference', 'conclave', 'seminar', 'symposium', 'convention'],
   },
   {
     section: 'summits-events',
     category: 'events',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['event', 'celebration', 'ceremony', 'function'],
+    feeds: [PIB.delhi, NEWS.hinduNational],
+    keywords: ['event', 'celebration', 'ceremony', 'function', 'expo'],
   },
 
-  // Committees
+  // =========== COMMITTEES ===========
   {
     section: 'committees',
     category: 'committees',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-      { url: PRS_FEEDS.legislative, name: 'PRS Legislative', type: 'rss', priority: 2 },
-    ],
-    keywords: ['committee', 'panel', 'commission', 'task force'],
+    feeds: [PIB.delhi, PRS.bills, PRS.general],
+    keywords: ['committee', 'panel', 'commission', 'task force', 'parliamentary'],
   },
   {
     section: 'committees',
     category: 'meetings',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['meeting', 'session', 'assembly'],
+    feeds: [PIB.delhi, PRS.general],
+    keywords: ['meeting', 'session', 'assembly', 'parliament'],
   },
 
-  // Rankings & Reports
+  // =========== RANKINGS & REPORTS ===========
   {
     section: 'rankings-reports',
     category: 'rankings',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['ranking', 'rank', 'index', 'top', 'best', 'list'],
+    feeds: [PIB.delhi, NEWS.hinduNational, NEWS.bsEconomy],
+    keywords: ['ranking', 'rank', 'index', 'top', 'best', 'list', 'survey'],
   },
   {
     section: 'rankings-reports',
     category: 'reports',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-      { url: RBI_FEEDS.pressReleases, name: 'RBI Press', type: 'rss', priority: 2 },
-    ],
-    keywords: ['report', 'survey', 'study', 'analysis', 'findings'],
+    feeds: [PIB.delhi, RBI.press, NEWS.bsEconomy, PRS.general],
+    keywords: ['report', 'survey', 'study', 'analysis', 'findings', 'data'],
   },
 
-  // Acquisitions & Mergers
+  // =========== ACQUISITIONS & MERGERS ===========
   {
     section: 'acquisitions-mergers',
     category: 'acquisitions',
-    feeds: [
-      { url: PIB_FEEDS.commerce, name: 'PIB Commerce', type: 'rss', priority: 1 },
-    ],
-    keywords: ['acquisition', 'acquire', 'takeover', 'buy'],
+    feeds: [PIB.commerce, NEWS.mintCompanies, NEWS.bsMarkets],
+    keywords: ['acquisition', 'acquire', 'takeover', 'buy', 'stake'],
   },
   {
     section: 'acquisitions-mergers',
     category: 'mergers',
-    feeds: [
-      { url: PIB_FEEDS.commerce, name: 'PIB Commerce', type: 'rss', priority: 1 },
-    ],
+    feeds: [PIB.commerce, NEWS.mintCompanies, NEWS.bsMarkets],
     keywords: ['merger', 'merge', 'consolidation', 'amalgamation'],
   },
 
-  // Defence
+  // =========== DEFENCE ===========
   {
     section: 'defence',
     category: 'defence-exercises',
-    feeds: [
-      { url: PIB_FEEDS.defence, name: 'PIB Defence', type: 'rss', priority: 1 },
-    ],
-    keywords: ['exercise', 'drill', 'military exercise', 'joint exercise'],
+    feeds: [PIB.defence, NEWS.hinduNational],
+    keywords: ['exercise', 'drill', 'military exercise', 'joint exercise', 'wargame'],
   },
   {
     section: 'defence',
     category: 'defence-acquisitions',
-    feeds: [
-      { url: PIB_FEEDS.defence, name: 'PIB Defence', type: 'rss', priority: 1 },
-    ],
-    keywords: ['procurement', 'acquisition', 'purchase', 'contract', 'deal'],
+    feeds: [PIB.defence, NEWS.hinduNational],
+    keywords: ['procurement', 'acquisition', 'purchase', 'contract', 'deal', 'order'],
   },
   {
     section: 'defence',
     category: 'defence-news',
-    feeds: [
-      { url: PIB_FEEDS.defence, name: 'PIB Defence', type: 'rss', priority: 1 },
-    ],
+    feeds: [PIB.defence, NEWS.hinduNational, NEWS.ieNational],
     keywords: ['defence', 'defense', 'military', 'armed forces', 'army', 'navy', 'air force'],
   },
 
-  // Science & Tech
+  // =========== SCIENCE & TECH ===========
   {
     section: 'science-tech',
     category: 'space',
-    feeds: [
-      { url: PIB_FEEDS.science, name: 'PIB Science', type: 'rss', priority: 1 },
-    ],
+    feeds: [PIB.science, NEWS.hinduSciTech, NEWS.ieTech],
     keywords: ['isro', 'space', 'satellite', 'rocket', 'launch', 'mission', 'chandrayaan', 'gaganyaan'],
   },
   {
     section: 'science-tech',
     category: 'technology',
-    feeds: [
-      { url: PIB_FEEDS.science, name: 'PIB Science', type: 'rss', priority: 1 },
-    ],
-    keywords: ['technology', 'digital', 'ai', 'artificial intelligence', 'innovation'],
+    feeds: [PIB.science, NEWS.hinduSciTech, NEWS.ieTech],
+    keywords: ['technology', 'digital', 'ai', 'artificial intelligence', 'innovation', '5g', 'semiconductor'],
   },
   {
     section: 'science-tech',
     category: 'science-discoveries',
-    feeds: [
-      { url: PIB_FEEDS.science, name: 'PIB Science', type: 'rss', priority: 1 },
-    ],
-    keywords: ['discovery', 'research', 'scientist', 'breakthrough', 'innovation'],
+    feeds: [PIB.science, NEWS.hinduSciTech],
+    keywords: ['discovery', 'research', 'scientist', 'breakthrough', 'innovation', 'iit', 'iisc'],
   },
 
-  // Sports
+  // =========== SPORTS ===========
   {
     section: 'sports',
     category: 'cricket',
-    feeds: [
-      { url: PIB_FEEDS.sports, name: 'PIB Sports', type: 'rss', priority: 1 },
-    ],
-    keywords: ['cricket', 'bcci', 'icc', 'test', 'odi', 't20'],
+    feeds: [PIB.sports, NEWS.hinduSports, NEWS.ieSports],
+    keywords: ['cricket', 'bcci', 'icc', 'test', 'odi', 't20', 'ipl'],
   },
   {
     section: 'sports',
     category: 'football',
-    feeds: [
-      { url: PIB_FEEDS.sports, name: 'PIB Sports', type: 'rss', priority: 1 },
-    ],
-    keywords: ['football', 'fifa', 'aiff', 'isl'],
+    feeds: [PIB.sports, NEWS.hinduSports, NEWS.ieSports],
+    keywords: ['football', 'fifa', 'aiff', 'isl', 'premier league'],
   },
   {
     section: 'sports',
     category: 'tennis',
-    feeds: [
-      { url: PIB_FEEDS.sports, name: 'PIB Sports', type: 'rss', priority: 1 },
-    ],
-    keywords: ['tennis', 'atp', 'wta', 'grand slam'],
+    feeds: [PIB.sports, NEWS.hinduSports, NEWS.ieSports],
+    keywords: ['tennis', 'atp', 'wta', 'grand slam', 'wimbledon'],
   },
   {
     section: 'sports',
     category: 'badminton',
-    feeds: [
-      { url: PIB_FEEDS.sports, name: 'PIB Sports', type: 'rss', priority: 1 },
-    ],
-    keywords: ['badminton', 'bwf', 'shuttler'],
+    feeds: [PIB.sports, NEWS.hinduSports, NEWS.ieSports],
+    keywords: ['badminton', 'bwf', 'shuttler', 'sindhu', 'lakshya'],
   },
   {
     section: 'sports',
     category: 'chess',
-    feeds: [
-      { url: PIB_FEEDS.sports, name: 'PIB Sports', type: 'rss', priority: 1 },
-    ],
-    keywords: ['chess', 'fide', 'grandmaster'],
+    feeds: [PIB.sports, NEWS.hinduSports],
+    keywords: ['chess', 'fide', 'grandmaster', 'praggnanandhaa', 'gukesh'],
   },
   {
     section: 'sports',
     category: 'athletics',
-    feeds: [
-      { url: PIB_FEEDS.sports, name: 'PIB Sports', type: 'rss', priority: 1 },
-    ],
-    keywords: ['athletics', 'olympic', 'asian games', 'commonwealth'],
+    feeds: [PIB.sports, NEWS.hinduSports, NEWS.ieSports],
+    keywords: ['athletics', 'olympic', 'asian games', 'commonwealth', 'world championship'],
+  },
+  {
+    section: 'sports',
+    category: 'hockey',
+    feeds: [PIB.sports, NEWS.hinduSports],
+    keywords: ['hockey', 'fih', 'indian hockey'],
   },
   {
     section: 'sports',
     category: 'other-sports',
-    feeds: [
-      { url: PIB_FEEDS.sports, name: 'PIB Sports', type: 'rss', priority: 1 },
-    ],
-    keywords: ['sports', 'game', 'championship', 'tournament'],
+    feeds: [PIB.sports, NEWS.hinduSports, NEWS.ieSports],
+    keywords: ['sports', 'game', 'championship', 'medal', 'tournament'],
   },
 
-  // Books & Authors
-  {
-    section: 'books-authors',
-    category: 'books',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['book', 'author', 'release', 'launch', 'published', 'autobiography', 'memoir'],
-  },
-
-  // Obituary
-  {
-    section: 'obituary',
-    category: 'obituary',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['passed away', 'demise', 'death', 'obituary', 'condolence'],
-  },
-
-  // Important Days
-  {
-    section: 'important-days',
-    category: 'important-days',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-    ],
-    keywords: ['day', 'week', 'observance', 'celebrate', 'commemorate', 'anniversary'],
-  },
-
-  // Apps & Portals
-  {
-    section: 'apps-portals',
-    category: 'apps-portals',
-    feeds: [
-      { url: PIB_FEEDS.all, name: 'PIB All', type: 'rss', priority: 1 },
-      { url: PIB_FEEDS.science, name: 'PIB Science', type: 'rss', priority: 2 },
-    ],
-    keywords: ['app', 'portal', 'website', 'platform', 'digital', 'mobile app', 'launch'],
-  },
-
-  // Environment
+  // =========== ENVIRONMENT ===========
   {
     section: 'environment',
     category: 'environment-news',
-    feeds: [
-      { url: PIB_FEEDS.environment, name: 'PIB Environment', type: 'rss', priority: 1 },
-    ],
-    keywords: ['environment', 'pollution', 'conservation', 'green'],
+    feeds: [PIB.environment, SECTORAL.downToEarth, NEWS.hinduNational],
+    keywords: ['environment', 'climate', 'pollution', 'forest', 'biodiversity', 'wildlife'],
   },
   {
     section: 'environment',
-    category: 'climate',
-    feeds: [
-      { url: PIB_FEEDS.environment, name: 'PIB Environment', type: 'rss', priority: 1 },
-    ],
-    keywords: ['climate', 'carbon', 'emission', 'warming', 'cop', 'unfccc'],
+    category: 'climate-change',
+    feeds: [PIB.environment, SECTORAL.downToEarth],
+    keywords: ['climate', 'carbon', 'emission', 'renewable', 'solar', 'green'],
   },
+
+  // =========== EDUCATION ===========
   {
-    section: 'environment',
-    category: 'biodiversity',
-    feeds: [
-      { url: PIB_FEEDS.environment, name: 'PIB Environment', type: 'rss', priority: 1 },
-    ],
-    keywords: ['biodiversity', 'species', 'wildlife', 'forest', 'tiger', 'sanctuary'],
+    section: 'education',
+    category: 'education-news',
+    feeds: [PIB.education, NEWS.hinduNational, NEWS.ieNational],
+    keywords: ['education', 'school', 'university', 'nep', 'exam', 'result'],
+  },
+
+  // =========== HEALTH ===========
+  {
+    section: 'health',
+    category: 'health-news',
+    feeds: [PIB.health, NEWS.hinduNational],
+    keywords: ['health', 'medical', 'hospital', 'disease', 'vaccine', 'who'],
+  },
+
+  // =========== AGRICULTURE ===========
+  {
+    section: 'agriculture',
+    category: 'agriculture-news',
+    feeds: [PIB.agriculture, NEWS.hinduNational, SECTORAL.downToEarth],
+    keywords: ['agriculture', 'farmer', 'crop', 'msp', 'irrigation', 'kisan'],
+  },
+
+  // =========== LEGISLATION ===========
+  {
+    section: 'legislation',
+    category: 'bills-acts',
+    feeds: [PRS.bills, PRS.general, PIB.delhi],
+    keywords: ['bill', 'act', 'law', 'parliament', 'legislation', 'amendment'],
   },
 ];
+
+// =============================================================================
+// HELPER FUNCTIONS
+// =============================================================================
 
 /**
  * Get feeds for a specific category
  */
-export function getFeedsForCategory(section: string, category: string): CategoryFeeds | undefined {
-  return CATEGORY_FEEDS.find(cf => cf.section === section && cf.category === category);
+export function getFeedsForCategory(section: string, category: string): CategoryConfig | undefined {
+  return CATEGORY_FEEDS.find(
+    cf => cf.section === section && cf.category === category
+  );
 }
 
 /**
- * Get all unique feed URLs (for bulk fetching)
+ * Get all unique feeds across all categories
  */
-export function getAllUniqueFeedUrls(): string[] {
-  const urls = new Set<string>();
-  CATEGORY_FEEDS.forEach(cf => {
-    cf.feeds.forEach(feed => urls.add(feed.url));
-  });
-  return Array.from(urls);
+export function getAllFeeds(): Feed[] {
+  const feedMap = new Map<string, Feed>();
+  
+  for (const config of CATEGORY_FEEDS) {
+    for (const feed of config.feeds) {
+      if (!feedMap.has(feed.id)) {
+        feedMap.set(feed.id, feed);
+      }
+    }
+  }
+  
+  return Array.from(feedMap.values());
+}
+
+/**
+ * Get feeds by tags
+ */
+export function getFeedsByTag(tag: string): Feed[] {
+  const feeds: Feed[] = [];
+  const seen = new Set<string>();
+  
+  for (const config of CATEGORY_FEEDS) {
+    for (const feed of config.feeds) {
+      if (!seen.has(feed.id) && feed.tags?.includes(tag)) {
+        feeds.push(feed);
+        seen.add(feed.id);
+      }
+    }
+  }
+  
+  return feeds;
 }

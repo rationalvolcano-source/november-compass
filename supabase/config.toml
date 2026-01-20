@@ -19,3 +19,7 @@ verify_jwt = false
 [functions.verify-payment]
 enabled = true
 verify_jwt = false
+
+[functions.ingest-feeds-daily]
+enabled = true
+verify_jwt = false
