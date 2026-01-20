@@ -2,6 +2,41 @@ import { create } from 'zustand';
 import { NewsItem, CategoryNews } from '@/types/news';
 import { CURRENT_AFFAIRS_SECTIONS } from '@/lib/categories';
 import { supabase } from '@/integrations/supabase/client';
+import { toast } from "@/hooks/use-toast";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type InvokeError = {
+  message?: string;
+  context?: { status?: number; body?: any };
+} & Error;
+
+async function invokeFetchNewsWithBackoff(params: { category: string; month: string; year: string }) {
+  // Free-tier Gemini quotas are very tight; a small backoff prevents error loops.
+  const MAX_RETRIES = 3;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const { data, error } = await supabase.functions.invoke("fetch-news", { body: params });
+
+    if (!error) return { data };
+
+    const err = error as unknown as InvokeError;
+    const status = err?.context?.status;
+    const body = err?.context?.body;
+
+    if (status === 429 && attempt < MAX_RETRIES) {
+      const retryAfterSeconds =
+        typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : 20;
+      await sleep((retryAfterSeconds + 1) * 1000);
+      continue;
+    }
+
+    throw error;
+  }
+
+  // Should never reach here
+  throw new Error("Failed to fetch news after retries");
+}
 
 interface NewsStore {
   month: string;
@@ -69,15 +104,11 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     });
 
     try {
-      const { data, error } = await supabase.functions.invoke('fetch-news', {
-        body: { 
-          category: category.categoryName, 
-          month, 
-          year 
-        },
+      const { data } = await invokeFetchNewsWithBackoff({
+        category: category.categoryName,
+        month,
+        year,
       });
-
-      if (error) throw error;
 
       const newsItems: NewsItem[] = (data.news || []).map((item: any, index: number) => ({
         id: `${categoryId}-${index}-${Date.now()}`,
@@ -113,6 +144,25 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
         },
       });
     } catch (error) {
+      const err = error as any;
+      const status = err?.context?.status;
+      const body = err?.context?.body;
+
+      if (status === 429) {
+        const retryAfterSeconds = typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : null;
+        toast({
+          title: "Rate limit hit",
+          description: retryAfterSeconds
+            ? `Please wait ~${retryAfterSeconds}s and try again.`
+            : "Please wait a bit and try again.",
+        });
+      } else {
+        toast({
+          title: "Failed to fetch news",
+          description: typeof body?.error === "string" ? body.error : "Please try again.",
+        });
+      }
+
       console.error('Error fetching news:', error);
       set({
         categoryNews: {
@@ -127,7 +177,7 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     const { categoryNews, month, year } = get();
     const categoryIds = Object.keys(categoryNews);
     const totalCategories = categoryIds.length;
-    const CONCURRENCY = 5; // Number of parallel fetches
+    const CONCURRENCY = 1; // Keep low to avoid free-tier Gemini rate limits
 
     set({
       isBulkFetching: true,
@@ -135,7 +185,7 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     });
 
     let fetchedCount = 0;
-
+    let rateLimitToastShown = false;
     // Helper to fetch a single category
     const fetchCategory = async (categoryId: string) => {
       const category = get().categoryNews[categoryId];
@@ -153,12 +203,12 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
         },
       });
 
-      try {
-        const { data, error } = await supabase.functions.invoke('fetch-news', {
-          body: { category: category.categoryName, month, year },
-        });
-
-        if (error) throw error;
+       try {
+         const { data } = await invokeFetchNewsWithBackoff({
+           category: category.categoryName,
+           month,
+           year,
+         });
 
         const newsItems: NewsItem[] = (data.news || []).map((item: any, index: number) => ({
           id: `${categoryId}-${index}-${Date.now()}`,
@@ -193,27 +243,45 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
             },
           },
         });
-      } catch (error) {
-        console.error('Error fetching news for category:', categoryId, error);
-        set({
-          categoryNews: {
-            ...get().categoryNews,
-            [categoryId]: { ...get().categoryNews[categoryId], loading: false, fetched: true },
-          },
-        });
-      } finally {
+       } catch (error) {
+         const err = error as any;
+         const status = err?.context?.status;
+         const body = err?.context?.body;
+
+         if (status === 429 && !rateLimitToastShown) {
+           rateLimitToastShown = true;
+           const retryAfterSeconds = typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : null;
+           toast({
+             title: "Rate limit hit during bulk fetch",
+             description: retryAfterSeconds
+               ? `Waiting ~${retryAfterSeconds}s before continuing...`
+               : "Waiting a bit before continuing...",
+           });
+         }
+
+         console.error('Error fetching news for category:', categoryId, error);
+         set({
+           categoryNews: {
+             ...get().categoryNews,
+             [categoryId]: { ...get().categoryNews[categoryId], loading: false, fetched: true },
+           },
+         });
+       } finally {
         fetchedCount++;
         const currentActive = get().bulkFetchProgress.activeCategories.filter(
           (name) => name !== category.categoryName
         );
-        set({
-          bulkFetchProgress: {
-            total: totalCategories,
-            fetched: fetchedCount,
-            activeCategories: currentActive,
-          },
-        });
-      }
+         set({
+           bulkFetchProgress: {
+             total: totalCategories,
+             fetched: fetchedCount,
+             activeCategories: currentActive,
+           },
+         });
+
+         // Gentle pacing to stay within free-tier quotas
+         await sleep(1200);
+       }
     };
 
     // Process in batches with concurrency limit
