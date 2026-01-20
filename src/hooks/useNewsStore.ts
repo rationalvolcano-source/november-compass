@@ -80,7 +80,7 @@ interface NewsStore {
   setYear: (year: string) => void;
   initializeCategories: () => void;
   fetchCandidates: (categoryId: string) => Promise<void>;
-  rerankCandidates: (categoryId: string) => Promise<void>;
+  rerankCandidates: (categoryId: string) => Promise<{ source: string; selectedCount: number }>;
   fetchAndRerank: (categoryId: string) => Promise<void>;
   enrichSelected: (categoryId: string) => Promise<void>;
   bulkFetchDrafts: (categoryIds: string[]) => Promise<void>;
@@ -167,12 +167,12 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     }
   },
 
-  // Step 2: Rerank candidates using Gemini
-  rerankCandidates: async (categoryId: string) => {
+  // Step 2: Rerank candidates using Gemini (with fallback)
+  rerankCandidates: async (categoryId: string): Promise<{ source: string; selectedCount: number }> => {
     const { month, year, categoryNews } = get();
     const category = categoryNews[categoryId];
     
-    if (!category) return;
+    if (!category) return { source: 'empty', selectedCount: 0 };
 
     const monthNum = monthNameToNumber(month);
     const yearNum = parseInt(year);
@@ -206,7 +206,10 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
         },
       });
 
-      return data;
+      return { 
+        source: data?.source || 'fresh', 
+        selectedCount: data?.selectedCount || items.length 
+      };
     } catch (error) {
       console.error('Error reranking candidates:', error);
       throw error;

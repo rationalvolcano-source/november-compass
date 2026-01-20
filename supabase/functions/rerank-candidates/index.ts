@@ -46,13 +46,14 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
 
 /**
  * Call Gemini API for reranking
+ * Returns null if credits exhausted (402), otherwise returns selected IDs
  */
 async function callGeminiForSelection(
   apiKey: string,
   category: string,
   categoryDescription: string,
   candidates: Candidate[]
-): Promise<string[]> {
+): Promise<string[] | null> {
   const url = "https://ai.gateway.lovable.dev/v1/chat/completions";
   
   // Build compact candidate list
@@ -99,6 +100,12 @@ IMPORTANT RULES:
         },
         body: JSON.stringify(body),
       });
+
+      // Handle 402 (out of credits) gracefully
+      if (response.status === 402) {
+        console.log("AI credits exhausted, returning candidates without reranking");
+        return null; // Signal to use fallback
+      }
 
       if (response.status === 429 || response.status === 503) {
         console.log(`Gemini rate limited (attempt ${attempts}), waiting...`);
@@ -238,7 +245,7 @@ serve(async (req) => {
       );
     }
 
-    // Step 4: Call Gemini for reranking
+    // Step 4: Call Gemini for reranking (with fallback for credit exhaustion)
     console.log("Calling Gemini for selection...");
     const categoryDesc = CATEGORY_DESCRIPTIONS[category] || `News items related to ${category}`;
     const selectedIds = await callGeminiForSelection(
@@ -247,6 +254,22 @@ serve(async (req) => {
       categoryDesc,
       candidates as Candidate[]
     );
+
+    // If credits exhausted (null), return top candidates without AI reranking
+    if (selectedIds === null) {
+      console.log("AI credits exhausted, returning top candidates without reranking");
+      const topCandidates = (candidates as Candidate[]).slice(0, SELECTION_SIZE);
+      return new Response(
+        JSON.stringify({
+          items: topCandidates,
+          source: "fallback",
+          message: "AI credits exhausted. Showing top candidates by date/source.",
+          candidateCount: candidates.length,
+          selectedCount: topCandidates.length,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     console.log(`Gemini selected ${selectedIds.length} items`);
 
