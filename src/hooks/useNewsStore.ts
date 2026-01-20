@@ -3,6 +3,7 @@ import { NewsItem, CategoryNews } from '@/types/news';
 import { CURRENT_AFFAIRS_SECTIONS } from '@/lib/categories';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from "@/hooks/use-toast";
+import { fetchNewsWithPuter, loadPuterSDK, isPuterAvailable } from '@/lib/puterAI';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -11,6 +12,29 @@ type InvokeError = {
   context?: { status?: number; body?: any };
 } & Error;
 
+// Initialize Puter SDK early
+loadPuterSDK().catch(console.warn);
+
+/**
+ * Primary fetch method using Puter.js (free, unlimited via Perplexity)
+ * Falls back to edge function if Puter fails
+ */
+async function fetchNewsWithFallback(params: { category: string; month: string; year: string }) {
+  // Try Puter.js first (free, unlimited)
+  if (isPuterAvailable()) {
+    try {
+      console.log('Fetching with Puter.js (free Perplexity AI)...');
+      const result = await fetchNewsWithPuter(params.category, params.month, params.year);
+      return { data: result, source: 'puter' as const };
+    } catch (puterError) {
+      console.warn('Puter.js failed, falling back to edge function:', puterError);
+    }
+  }
+
+  // Fallback to edge function with backoff
+  return invokeFetchNewsWithBackoff(params);
+}
+
 async function invokeFetchNewsWithBackoff(params: { category: string; month: string; year: string }) {
   // Free-tier quotas are very tight; a small backoff prevents error loops.
   const MAX_RETRIES = 3;
@@ -18,7 +42,7 @@ async function invokeFetchNewsWithBackoff(params: { category: string; month: str
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const { data, error } = await supabase.functions.invoke("fetch-news", { body: params });
 
-    if (!error) return { data };
+    if (!error) return { data, source: 'edge' as const };
 
     const err = error as unknown as InvokeError;
     const status = err?.context?.status;
@@ -114,11 +138,18 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     });
 
     try {
-      const { data } = await invokeFetchNewsWithBackoff({
+      const { data, source } = await fetchNewsWithFallback({
         category: category.categoryName,
         month,
         year,
       });
+
+      if (source === 'puter') {
+        toast({
+          title: "✨ Free AI",
+          description: "Fetched using Puter.js (no API costs!)",
+        });
+      }
 
       const newsItems: NewsItem[] = (data.news || []).map((item: any, index: number) => ({
         id: `${categoryId}-${index}-${Date.now()}`,
@@ -227,7 +258,7 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
       });
 
       try {
-        const { data } = await invokeFetchNewsWithBackoff({
+        const { data } = await fetchNewsWithFallback({
           category: category.categoryName,
           month,
           year,
