@@ -94,6 +94,14 @@ export function isPuterAvailable(): boolean {
   return puterLoaded && !!window.puter;
 }
 
+/**
+ * Try to load Puter and check availability
+ */
+export async function ensurePuterLoaded(): Promise<boolean> {
+  if (isPuterAvailable()) return true;
+  return await loadPuterSDK();
+}
+
 interface NewsItemRaw {
   headline: string;
   date: string;
