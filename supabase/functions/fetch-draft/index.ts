@@ -16,6 +16,85 @@ const corsHeaders = {
 
 const MAX_ITEMS_PER_CATEGORY = 12;
 
+// Month number to name mapping
+const MONTH_NAMES = [
+  '', 'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+// LLM fallback for when RSS fails
+async function fetchWithLLM(
+  category: string, 
+  section: string,
+  month: number, 
+  year: number
+): Promise<RawFeedItem[]> {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (!LOVABLE_API_KEY) {
+    console.warn("No LOVABLE_API_KEY for LLM fallback");
+    return [];
+  }
+
+  const monthName = MONTH_NAMES[month] || 'January';
+  
+  const systemPrompt = `You are an expert researcher compiling Indian current affairs for competitive exams.
+Return a JSON array of news items from ${monthName} ${year} for the category: "${category}" (section: ${section}).
+
+Each item must have:
+- title: Clear headline (string)
+- date: Approximate date like "15 ${monthName} ${year}" or "Early ${monthName} ${year}"
+- snippet: 1-2 sentence description
+- source: "AI Generated"
+
+Return 8-12 items as a valid JSON array. If no relevant news, return [].
+Output ONLY the JSON array, no extra text.`;
+
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `List important ${category} news from India for ${monthName} ${year}. JSON array only.` },
+        ],
+        temperature: 0.5,
+        max_tokens: 2000,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(`LLM fallback failed: ${response.status}`);
+      return [];
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content ?? "";
+
+    // Parse JSON from response
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+
+    const items = JSON.parse(jsonMatch[0]);
+    
+    return items.map((item: any) => ({
+      title: item.title || item.headline || "",
+      url: "",
+      source: "AI Generated",
+      publishedAt: null,
+      snippet: item.snippet || item.description || "",
+    })).filter((item: RawFeedItem) => item.title);
+
+  } catch (error) {
+    console.error("LLM fallback error:", error);
+    return [];
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -63,23 +142,6 @@ serve(async (req) => {
 
     // Get feeds for this category
     const categoryFeeds = getFeedsForCategory(section, category);
-    
-    if (!categoryFeeds) {
-      // Fallback: try to find any feeds for the section
-      const sectionFeeds = CATEGORY_FEEDS.filter(cf => cf.section === section);
-      if (sectionFeeds.length === 0) {
-        return new Response(
-          JSON.stringify({ 
-            items: [], 
-            source: "rss", 
-            count: 0,
-            message: "No feeds configured for this category" 
-          }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
-
     const feeds = categoryFeeds?.feeds || [];
     const keywords = categoryFeeds?.keywords || [];
 
@@ -106,7 +168,7 @@ serve(async (req) => {
 
     // Deduplicate by hash
     const seenHashes = new Set<string>();
-    const uniqueItems: RawFeedItem[] = [];
+    let uniqueItems: RawFeedItem[] = [];
     
     for (const item of allItems) {
       const hash = createItemHash(item.title, item.url);
@@ -116,6 +178,16 @@ serve(async (req) => {
       }
     }
     console.log(`After deduplication: ${uniqueItems.length} items`);
+
+    // If RSS returned nothing, use LLM fallback
+    let source = "rss";
+    if (uniqueItems.length === 0) {
+      console.log("RSS returned 0 items, trying LLM fallback...");
+      const categoryName = categoryFeeds?.category || category;
+      uniqueItems = await fetchWithLLM(categoryName, section, month, year);
+      source = "llm";
+      console.log(`LLM fallback returned ${uniqueItems.length} items`);
+    }
 
     // Limit to max items
     const limitedItems = uniqueItems.slice(0, MAX_ITEMS_PER_CATEGORY);
@@ -127,11 +199,11 @@ serve(async (req) => {
       month,
       year,
       title: item.title,
-      url: item.url,
+      url: item.url || null,
       source: item.source,
       published_at: item.publishedAt?.toISOString() || null,
       snippet: item.snippet,
-      hash: createItemHash(item.title, item.url),
+      hash: createItemHash(item.title, item.url || item.title),
     }));
 
     // Insert into database (upsert on hash)
@@ -162,7 +234,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         items: finalItems || [], 
-        source: "rss",
+        source,
         count: finalItems?.length || 0,
         feedsQueried: feeds.length
       }),
