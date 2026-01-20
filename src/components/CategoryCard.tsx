@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, RefreshCw, ChevronDown, ChevronUp } from "lucide-react";
@@ -10,9 +10,10 @@ interface CategoryCardProps {
   categoryId: string;
   categoryName: string;
   sectionName: string;
+  icon: any;
 }
 
-export const CategoryCard = ({ categoryId, categoryName, sectionName }: CategoryCardProps) => {
+export const CategoryCard = ({ categoryId, categoryName, sectionName, icon: Icon }: CategoryCardProps) => {
   const [expanded, setExpanded] = useState(false);
   const { categoryNews, fetchNews } = useNewsStore();
   const category = categoryNews[categoryId];
@@ -26,31 +27,35 @@ export const CategoryCard = ({ categoryId, categoryName, sectionName }: Category
   const totalCount = category?.news.length || 0;
 
   return (
-    <Card className="border-border">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <div className="space-y-1">
-            <CardTitle className="text-lg font-semibold">{categoryName}</CardTitle>
-            <p className="text-sm text-muted-foreground">{sectionName}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            {category?.fetched && (
-              <Badge variant="secondary">
-                {selectedCount}/{totalCount} selected
+    <Card className={`border-border/50 bg-background/50 hover:bg-background/80 transition-all ${category?.fetched && totalCount > 0 ? 'col-span-full' : ''}`}>
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-1.5 rounded-md bg-primary/10 text-primary shrink-0">
+              <Icon className="h-4 w-4" />
+            </div>
+            <span className="font-medium truncate">{categoryName}</span>
+            {category?.fetched && totalCount > 0 && (
+              <Badge variant="secondary" className="text-xs shrink-0">
+                {selectedCount}/{totalCount}
               </Badge>
             )}
+          </div>
+          
+          <div className="flex items-center gap-2 shrink-0">
             <Button
               size="sm"
-              variant="outline"
+              variant={category?.fetched ? "ghost" : "default"}
               onClick={handleFetch}
               disabled={category?.loading}
+              className={!category?.fetched ? "neon-glow" : ""}
             >
               {category?.loading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : category?.fetched ? (
                 <RefreshCw className="h-4 w-4" />
               ) : (
-                "Fetch News"
+                "Fetch"
               )}
             </Button>
             {category?.fetched && totalCount > 0 && (
@@ -68,11 +73,9 @@ export const CategoryCard = ({ categoryId, categoryName, sectionName }: Category
             )}
           </div>
         </div>
-      </CardHeader>
-      
-      {expanded && category?.news && category.news.length > 0 && (
-        <CardContent className="pt-0">
-          <div className="space-y-3">
+        
+        {expanded && category?.news && category.news.length > 0 && (
+          <div className="mt-4 space-y-3">
             {category.news.map(item => (
               <NewsItemCard
                 key={item.id}
@@ -81,14 +84,12 @@ export const CategoryCard = ({ categoryId, categoryName, sectionName }: Category
               />
             ))}
           </div>
-        </CardContent>
-      )}
-      
-      {expanded && category?.fetched && category.news.length === 0 && (
-        <CardContent className="pt-0">
-          <p className="text-sm text-muted-foreground">No news found for this category.</p>
-        </CardContent>
-      )}
+        )}
+        
+        {expanded && category?.fetched && category.news.length === 0 && (
+          <p className="mt-4 text-sm text-muted-foreground">No news found.</p>
+        )}
+      </CardContent>
     </Card>
   );
 };
