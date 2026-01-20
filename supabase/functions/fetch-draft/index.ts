@@ -156,15 +156,20 @@ serve(async (req) => {
     let allItems: RawFeedItem[] = feedResults.flat();
     console.log(`Fetched ${allItems.length} raw items from feeds`);
 
-    // Filter by date range
-    allItems = filterByDateRange(allItems, month, year);
-    console.log(`After date filter: ${allItems.length} items`);
-
-    // Filter by keywords (if any)
-    if (keywords.length > 0) {
-      allItems = filterByKeywords(allItems, keywords);
-      console.log(`After keyword filter: ${allItems.length} items`);
+    // Filter by date range (skip for current month since RSS has recent items)
+    const now = new Date();
+    const isCurrentMonth = month === (now.getMonth() + 1) && year === now.getFullYear();
+    
+    if (!isCurrentMonth) {
+      allItems = filterByDateRange(allItems, month, year);
+      console.log(`After date filter: ${allItems.length} items`);
+    } else {
+      console.log(`Skipping date filter for current month, keeping ${allItems.length} items`);
     }
+
+    // Skip keyword filtering - RSS sources are already category-specific
+    // Keywords were filtering out too many valid items
+    console.log(`Proceeding with ${allItems.length} items (keyword filter disabled)`);
 
     // Deduplicate by hash
     const seenHashes = new Set<string>();
