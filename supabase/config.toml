@@ -3,3 +3,19 @@ project_id = "gfidmyhywhnkblfyyjcq"
 [functions.fetch-news]
 enabled = true
 verify_jwt = false
+
+[functions.fetch-draft]
+enabled = true
+verify_jwt = false
+
+[functions.enrich-items]
+enabled = true
+verify_jwt = false
+
+[functions.create-order]
+enabled = true
+verify_jwt = false
+
+[functions.verify-payment]
+enabled = true
+verify_jwt = false
