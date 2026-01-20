@@ -14,6 +14,51 @@ export type Database = {
   }
   public: {
     Tables: {
+      candidates: {
+        Row: {
+          category: string
+          created_at: string
+          id: string
+          month: number
+          provider: string
+          published_at: string | null
+          section: string
+          snippet: string | null
+          source: string
+          title: string
+          url: string | null
+          year: number
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          id: string
+          month: number
+          provider: string
+          published_at?: string | null
+          section: string
+          snippet?: string | null
+          source: string
+          title: string
+          url?: string | null
+          year: number
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          id?: string
+          month?: number
+          provider?: string
+          published_at?: string | null
+          section?: string
+          snippet?: string | null
+          source?: string
+          title?: string
+          url?: string | null
+          year?: number
+        }
+        Relationships: []
+      }
       draft_items: {
         Row: {
           category: string
@@ -112,6 +157,7 @@ export type Database = {
           plan: Database["public"]["Enums"]["user_plan"]
           razorpay_order_id: string | null
           razorpay_payment_id: string | null
+          updated_at: string | null
           user_id: string
           valid_from: string
           valid_to: string | null
@@ -124,6 +170,7 @@ export type Database = {
           plan?: Database["public"]["Enums"]["user_plan"]
           razorpay_order_id?: string | null
           razorpay_payment_id?: string | null
+          updated_at?: string | null
           user_id: string
           valid_from?: string
           valid_to?: string | null
@@ -136,9 +183,85 @@ export type Database = {
           plan?: Database["public"]["Enums"]["user_plan"]
           razorpay_order_id?: string | null
           razorpay_payment_id?: string | null
+          updated_at?: string | null
           user_id?: string
           valid_from?: string
           valid_to?: string | null
+        }
+        Relationships: []
+      }
+      payments: {
+        Row: {
+          amount: number
+          created_at: string
+          currency: string
+          id: string
+          order_id: string
+          payment_id: string | null
+          provider: string
+          signature: string | null
+          status: string
+          user_id: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          currency?: string
+          id?: string
+          order_id: string
+          payment_id?: string | null
+          provider?: string
+          signature?: string | null
+          status?: string
+          user_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          currency?: string
+          id?: string
+          order_id?: string
+          payment_id?: string | null
+          provider?: string
+          signature?: string | null
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      selections: {
+        Row: {
+          candidate_set_hash: string
+          category: string
+          created_at: string
+          id: string
+          month: number
+          prompt_version: number
+          section: string
+          selected_ids: Json
+          year: number
+        }
+        Insert: {
+          candidate_set_hash: string
+          category: string
+          created_at?: string
+          id?: string
+          month: number
+          prompt_version?: number
+          section: string
+          selected_ids?: Json
+          year: number
+        }
+        Update: {
+          candidate_set_hash?: string
+          category?: string
+          created_at?: string
+          id?: string
+          month?: number
+          prompt_version?: number
+          section?: string
+          selected_ids?: Json
+          year?: number
         }
         Relationships: []
       }
