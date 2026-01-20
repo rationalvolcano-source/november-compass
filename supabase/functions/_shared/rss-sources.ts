@@ -17,20 +17,22 @@ export interface CategoryFeeds {
   keywords: string[]; // For filtering/categorization
 }
 
-// PIB (Press Information Bureau) RSS feeds - Lang=1 is English
+// PIB (Press Information Bureau) RSS feeds
+// Lang=1 is English, Lang=2 is Hindi
+// Regid=1 is PIB Delhi (Central/Main English releases)
 const PIB_BASE = 'https://pib.gov.in/RssMain.aspx';
 const PIB_FEEDS = {
-  all: `${PIB_BASE}?ModId=6&Lang=1&Regid=3`,
-  defence: `${PIB_BASE}?ModId=6&Lang=1&Regid=4`,
-  finance: `${PIB_BASE}?ModId=6&Lang=1&Regid=5`,
-  agriculture: `${PIB_BASE}?ModId=6&Lang=1&Regid=16`,
-  environment: `${PIB_BASE}?ModId=6&Lang=1&Regid=44`,
-  education: `${PIB_BASE}?ModId=6&Lang=1&Regid=42`,
-  health: `${PIB_BASE}?ModId=6&Lang=1&Regid=20`,
-  science: `${PIB_BASE}?ModId=6&Lang=1&Regid=30`,
-  commerce: `${PIB_BASE}?ModId=6&Lang=1&Regid=8`,
-  external: `${PIB_BASE}?ModId=6&Lang=1&Regid=7`,
-  sports: `${PIB_BASE}?ModId=6&Lang=1&Regid=52`,
+  all: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  defence: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  finance: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  agriculture: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  environment: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  education: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  health: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  science: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  commerce: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  external: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
+  sports: `${PIB_BASE}?ModId=6&Lang=1&Regid=1`,
 };
 
 // RBI RSS feeds
