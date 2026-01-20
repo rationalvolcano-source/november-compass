@@ -87,8 +87,8 @@ export const BulkFetchLoader = ({ totalCategories, fetchedCount, activeCategorie
       {/* Fun fact */}
       <div className="mt-8 max-w-lg text-center">
         <p className="text-xs text-muted-foreground/70">
-          ⚡ <span className="text-primary">Parallel fetching enabled!</span> Fetching up to 5 categories simultaneously
-          for faster results across <span className="text-primary">{totalCategories} categories</span>.
+          <span className="text-primary">Paced fetching enabled.</span> Fetching one category at a time to stay within API rate limits
+          across <span className="text-primary">{totalCategories} categories</span>.
         </p>
       </div>
     </div>

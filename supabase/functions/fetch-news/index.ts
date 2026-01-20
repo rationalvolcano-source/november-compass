@@ -142,7 +142,45 @@ Focus on exam-relevant facts: names, dates, numbers, places, and official design
       // 404 usually means "model name not available" for this API key; try the next.
       if (resp.status === 404) continue;
 
-      // Other errors (auth/quota/etc.) should stop immediately.
+      // Handle rate limits / auth issues explicitly so the client can react.
+      if (resp.status === 429) {
+        let retryAfterSeconds: number | null = null;
+        try {
+          const parsed = JSON.parse(lastErrorText);
+          const retryInfo = parsed?.error?.details?.find((d: any) => d?.["@type"] === "type.googleapis.com/google.rpc.RetryInfo");
+          const delay = retryInfo?.retryDelay as string | undefined; // e.g. "36s"
+          if (delay && /^\d+s$/.test(delay)) retryAfterSeconds = Number(delay.replace("s", ""));
+        } catch {
+          // ignore parsing errors
+        }
+
+        return new Response(
+          JSON.stringify({
+            error: "Google AI API rate limit exceeded",
+            details: lastErrorText,
+            retryAfterSeconds,
+          }),
+          {
+            status: 429,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      if (resp.status === 403 || resp.status === 401) {
+        return new Response(
+          JSON.stringify({
+            error: "Google AI API key invalid or quota/billing not enabled",
+            details: lastErrorText,
+          }),
+          {
+            status: 403,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      // Other errors: stop immediately and bubble details.
       return new Response(JSON.stringify({ error: `Google AI API error: ${resp.status}`, details: lastErrorText }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -162,24 +200,6 @@ Focus on exam-relevant facts: names, dates, numbers, places, and official design
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         }
       );
-    }
-
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (response.status === 403) {
-        return new Response(JSON.stringify({ error: "API key invalid or quota exceeded." }), {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      const errorText = await response.text();
-      console.error("Google AI API error:", response.status, errorText);
-      throw new Error(`Google AI API error: ${response.status}`);
     }
 
     const data = await response.json();
