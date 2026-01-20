@@ -95,6 +95,109 @@ Output ONLY the JSON array, no extra text.`;
   }
 }
 
+// Detect if text contains non-English characters (Hindi, etc.)
+function isNonEnglish(text: string): boolean {
+  // Check for Devanagari (Hindi), Arabic, Chinese, etc.
+  const nonLatinPattern = /[\u0900-\u097F\u0600-\u06FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF]/;
+  return nonLatinPattern.test(text);
+}
+
+// Translate items to English using LLM
+async function translateToEnglish(items: RawFeedItem[]): Promise<RawFeedItem[]> {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  if (!LOVABLE_API_KEY) {
+    console.warn("No LOVABLE_API_KEY for translation");
+    return items;
+  }
+
+  // Filter items that need translation
+  const itemsToTranslate = items.filter(item => isNonEnglish(item.title));
+  
+  if (itemsToTranslate.length === 0) {
+    console.log("All items already in English");
+    return items;
+  }
+
+  console.log(`Translating ${itemsToTranslate.length} non-English items...`);
+
+  // Create a map of original titles to items for easy lookup
+  const titleToItem = new Map<string, RawFeedItem>();
+  itemsToTranslate.forEach(item => titleToItem.set(item.title, item));
+
+  const titlesAndSnippets = itemsToTranslate.map((item, idx) => ({
+    idx,
+    title: item.title,
+    snippet: item.snippet || ""
+  }));
+
+  const systemPrompt = `You are a professional translator. Translate the following news items from Hindi/Devanagari to English.
+Return a JSON array with the same structure, keeping the 'idx' field and translating 'title' and 'snippet' to clear, natural English.
+Output ONLY valid JSON array, no extra text.`;
+
+  try {
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: JSON.stringify(titlesAndSnippets) },
+        ],
+        temperature: 0.2,
+        max_tokens: 4000,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(`Translation failed: ${response.status}`);
+      return items;
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content ?? "";
+
+    // Parse JSON from response
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      console.warn("Could not parse translation response");
+      return items;
+    }
+
+    const translations = JSON.parse(jsonMatch[0]);
+    
+    // Apply translations back to items
+    const translatedItems = items.map(item => {
+      if (!isNonEnglish(item.title)) {
+        return item; // Already English
+      }
+      
+      const translation = translations.find((t: any) => 
+        itemsToTranslate[t.idx]?.title === item.title
+      );
+      
+      if (translation) {
+        return {
+          ...item,
+          title: translation.title || item.title,
+          snippet: translation.snippet || item.snippet,
+        };
+      }
+      return item;
+    });
+
+    console.log(`Successfully translated ${translations.length} items`);
+    return translatedItems;
+
+  } catch (error) {
+    console.error("Translation error:", error);
+    return items;
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -192,6 +295,11 @@ serve(async (req) => {
       uniqueItems = await fetchWithLLM(categoryName, section, month, year);
       source = "llm";
       console.log(`LLM fallback returned ${uniqueItems.length} items`);
+    }
+
+    // Translate non-English items to English
+    if (uniqueItems.length > 0) {
+      uniqueItems = await translateToEnglish(uniqueItems);
     }
 
     // Limit to max items
