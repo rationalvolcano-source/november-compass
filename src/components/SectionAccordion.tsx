@@ -68,7 +68,6 @@ export const SectionAccordion = ({ section }: SectionAccordionProps) => {
                 key={category.id}
                 categoryId={category.id}
                 categoryName={category.name}
-                sectionName={section.name}
                 icon={category.icon}
               />
             ))}
