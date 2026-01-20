@@ -24,6 +24,11 @@ async function invokeFetchNewsWithBackoff(params: { category: string; month: str
     const status = err?.context?.status;
     const body = err?.context?.body;
 
+    // If it's a daily quota exhaustion, retries won't help.
+    if (status === 429 && typeof body?.details === "string" && body.details.includes("PerDay")) {
+      throw error;
+    }
+
     if (status === 429 && attempt < MAX_RETRIES) {
       const retryAfterSeconds =
         typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : 20;
@@ -186,6 +191,7 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
 
     let fetchedCount = 0;
     let rateLimitToastShown = false;
+
     // Helper to fetch a single category
     const fetchCategory = async (categoryId: string) => {
       const category = get().categoryNews[categoryId];
@@ -203,29 +209,29 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
         },
       });
 
-       try {
-         const { data } = await invokeFetchNewsWithBackoff({
-           category: category.categoryName,
-           month,
-           year,
-         });
+      try {
+        const { data } = await invokeFetchNewsWithBackoff({
+          category: category.categoryName,
+          month,
+          year,
+        });
 
         const newsItems: NewsItem[] = (data.news || []).map((item: any, index: number) => ({
           id: `${categoryId}-${index}-${Date.now()}`,
-          headline: item.headline || '',
-          date: item.date || '',
-          description: item.description || '',
+          headline: item.headline || "",
+          date: item.date || "",
+          description: item.description || "",
           examHints: {
-            what: item.examHints?.what || '',
-            who: item.examHints?.who || '',
-            where: item.examHints?.where || '',
-            when: item.examHints?.when || '',
-            why: item.examHints?.why || '',
+            what: item.examHints?.what || "",
+            who: item.examHints?.who || "",
+            where: item.examHints?.where || "",
+            when: item.examHints?.when || "",
+            why: item.examHints?.why || "",
             numbers: item.examHints?.numbers || [],
-            ministry: item.examHints?.ministry || '',
+            ministry: item.examHints?.ministry || "",
             relatedSchemes: item.examHints?.relatedSchemes || [],
           },
-          source: item.source || '',
+          source: item.source || "",
           verified: false,
           selected: false,
           categoryId,
@@ -243,57 +249,68 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
             },
           },
         });
-       } catch (error) {
-         const err = error as any;
-         const status = err?.context?.status;
-         const body = err?.context?.body;
+      } catch (error) {
+        const err = error as any;
+        const status = err?.context?.status;
+        const body = err?.context?.body;
 
-         if (status === 429 && !rateLimitToastShown) {
-           rateLimitToastShown = true;
-           const retryAfterSeconds = typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : null;
-           toast({
-             title: "Rate limit hit during bulk fetch",
-             description: retryAfterSeconds
-               ? `Waiting ~${retryAfterSeconds}s before continuing...`
-               : "Waiting a bit before continuing...",
-           });
-         }
+        const isDailyQuota = status === 429 && typeof body?.details === "string" && body.details.includes("PerDay");
 
-         console.error('Error fetching news for category:', categoryId, error);
-         set({
-           categoryNews: {
-             ...get().categoryNews,
-             [categoryId]: { ...get().categoryNews[categoryId], loading: false, fetched: true },
-           },
-         });
-       } finally {
+        if (status === 429 && !rateLimitToastShown) {
+          rateLimitToastShown = true;
+          const retryAfterSeconds = typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : null;
+          toast({
+            title: isDailyQuota ? "Daily quota reached" : "Rate limit hit during bulk fetch",
+            description: isDailyQuota
+              ? "Google free tier daily limit is exhausted for today. Try tomorrow or enable billing."
+              : retryAfterSeconds
+                ? `Waiting ~${retryAfterSeconds}s before continuing...`
+                : "Waiting a bit before continuing...",
+          });
+        }
+
+        console.error("Error fetching news for category:", categoryId, error);
+
+        set({
+          categoryNews: {
+            ...get().categoryNews,
+            [categoryId]: { ...get().categoryNews[categoryId], loading: false, fetched: true },
+          },
+        });
+
+        // If daily quota is exhausted, abort the whole bulk run.
+        if (isDailyQuota) throw error;
+      } finally {
         fetchedCount++;
-        const currentActive = get().bulkFetchProgress.activeCategories.filter(
-          (name) => name !== category.categoryName
-        );
-         set({
-           bulkFetchProgress: {
-             total: totalCategories,
-             fetched: fetchedCount,
-             activeCategories: currentActive,
-           },
-         });
+        const currentActive = get().bulkFetchProgress.activeCategories.filter((name) => name !== category.categoryName);
+        set({
+          bulkFetchProgress: {
+            total: totalCategories,
+            fetched: fetchedCount,
+            activeCategories: currentActive,
+          },
+        });
 
-         // Gentle pacing to stay within free-tier quotas
-         await sleep(1200);
-       }
+        // Gentle pacing to stay within free-tier quotas
+        await sleep(1200);
+      }
     };
 
-    // Process in batches with concurrency limit
-    for (let i = 0; i < categoryIds.length; i += CONCURRENCY) {
-      const batch = categoryIds.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(fetchCategory));
+    try {
+      // Process in batches with concurrency limit
+      for (let i = 0; i < categoryIds.length; i += CONCURRENCY) {
+        const batch = categoryIds.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(fetchCategory));
+      }
+    } catch (e) {
+      // Ensure we don't leave the UI in a broken/loading state
+      console.error("Bulk fetch aborted:", e);
+    } finally {
+      set({
+        isBulkFetching: false,
+        bulkFetchProgress: { total: totalCategories, fetched: fetchedCount, activeCategories: [] },
+      });
     }
-
-    set({
-      isBulkFetching: false,
-      bulkFetchProgress: { total: totalCategories, fetched: totalCategories, activeCategories: [] },
-    });
   },
 
   toggleNewsSelection: (categoryId, newsId) => {
