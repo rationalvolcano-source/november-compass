@@ -95,7 +95,7 @@ Output ONLY the JSON array, no extra text.`;
 
       if (gatewayResp.status === 429) {
         return new Response(JSON.stringify({
-          error: "AI rate limit exceeded",
+          error: "AI rate limit exceeded. Please wait a moment and try again.",
           details: text,
         }), {
           status: 429,
@@ -105,7 +105,7 @@ Output ONLY the JSON array, no extra text.`;
 
       if (gatewayResp.status === 402) {
         return new Response(JSON.stringify({
-          error: "AI usage limit reached",
+          error: "AI usage limit reached. Please add credits in Settings → Workspace → Usage.",
           details: text,
         }), {
           status: 402,
@@ -113,9 +113,20 @@ Output ONLY the JSON array, no extra text.`;
         });
       }
 
+      // Handle transient 503 errors gracefully
+      if (gatewayResp.status === 503) {
+        return new Response(JSON.stringify({
+          error: "AI service temporarily unavailable. Please try again in a few seconds.",
+          details: text,
+        }), {
+          status: 503,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       console.error("AI gateway error:", gatewayResp.status, text);
       return new Response(JSON.stringify({
-        error: `AI gateway error: ${gatewayResp.status}`,
+        error: `AI service error. Please try again.`,
         details: text,
       }), {
         status: 500,
