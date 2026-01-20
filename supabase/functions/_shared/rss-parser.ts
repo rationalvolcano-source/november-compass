@@ -143,12 +143,12 @@ export function parseFeed(xml: string, sourceName: string): RawFeedItem[] {
 }
 
 /**
- * Fetch and parse a feed
+ * Fetch and parse a feed with browser-like headers
  */
 export async function fetchAndParseFeed(
   url: string, 
   sourceName: string,
-  timeout = 10000
+  timeout = 15000
 ): Promise<RawFeedItem[]> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -157,8 +157,13 @@ export async function fetchAndParseFeed(
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; NewsBot/1.0)',
-        'Accept': 'application/rss+xml, application/xml, text/xml, */*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Cache-Control': 'max-age=0',
       },
     });
     
