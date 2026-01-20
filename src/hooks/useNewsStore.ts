@@ -160,8 +160,8 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
 
       if (status === 402) {
         toast({
-          title: "AI usage limit reached",
-          description: "Not enough AI credits. Add more usage credits in the backend settings and try again.",
+          title: "AI credits exhausted",
+          description: "Add more credits at Settings → Workspace → Usage to continue.",
           variant: "destructive",
         });
       } else if (status === 429) {
@@ -171,6 +171,11 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
           description: retryAfterSeconds
             ? `Please wait ~${retryAfterSeconds}s and try again.`
             : "Please wait a bit and try again.",
+        });
+      } else if (status === 503) {
+        toast({
+          title: "AI service busy",
+          description: "Temporary issue. Please try again in a few seconds.",
         });
       } else {
         toast({
