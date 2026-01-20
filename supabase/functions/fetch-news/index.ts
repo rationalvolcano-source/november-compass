@@ -72,10 +72,48 @@ Include any major events, government decisions, appointments, achievements, or n
 
 Focus on exam-relevant facts: names, dates, numbers, places, and official designations.`;
 
-    // Call Google AI Gemini API directly
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key=${GOOGLE_AI_API_KEY}`,
-      {
+    // Call Google AI Gemini API directly.
+    // Model names vary by account/API version, so we first try to discover available models via ListModels,
+    // then attempt generateContent with a small prioritized list.
+    const hardcodedCandidates = [
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+      "gemini-1.5-flash-latest",
+      "gemini-1.5-pro",
+    ];
+
+    let modelCandidates = [...hardcodedCandidates];
+
+    try {
+      const listResp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${GOOGLE_AI_API_KEY}`,
+        { method: "GET" }
+      );
+
+      if (listResp.ok) {
+        const listData = await listResp.json();
+        const discovered = (listData.models ?? [])
+          .filter((m: any) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
+          .map((m: any) => String(m.name || "").replace(/^models\//, ""))
+          .filter(Boolean);
+
+        const flashFirst = discovered.filter((n: string) => n.toLowerCase().includes("flash"));
+
+        // Prefer flash models, then everything else, then fall back to our hardcoded list.
+        modelCandidates = Array.from(new Set([...flashFirst, ...discovered, ...hardcodedCandidates])).slice(0, 12);
+      }
+    } catch (e) {
+      // If discovery fails, we still try the hardcoded candidates.
+      console.warn("Model discovery failed, falling back to hardcoded candidates", e);
+    }
+
+    let response: Response | null = null;
+    let lastErrorText = "";
+
+    for (const model of modelCandidates) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GOOGLE_AI_API_KEY}`;
+
+      const resp = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -84,18 +122,47 @@ Focus on exam-relevant facts: names, dates, numbers, places, and official design
           contents: [
             {
               role: "user",
-              parts: [
-                { text: systemPrompt + "\n\n" + userPrompt }
-              ]
-            }
+              parts: [{ text: systemPrompt + "\n\n" + userPrompt }],
+            },
           ],
           generationConfig: {
             temperature: 0.7,
             maxOutputTokens: 8192,
           },
         }),
+      });
+
+      if (resp.ok) {
+        response = resp;
+        break;
       }
-    );
+
+      lastErrorText = await resp.text();
+
+      // 404 usually means "model name not available" for this API key; try the next.
+      if (resp.status === 404) continue;
+
+      // Other errors (auth/quota/etc.) should stop immediately.
+      return new Response(JSON.stringify({ error: `Google AI API error: ${resp.status}`, details: lastErrorText }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!response) {
+      console.error("Google AI API error: no usable model found", { modelCandidates, lastErrorText });
+      return new Response(
+        JSON.stringify({
+          error: "Google AI API error: No available model found for this API key",
+          details: lastErrorText,
+          triedModels: modelCandidates,
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
 
     if (!response.ok) {
       if (response.status === 429) {
