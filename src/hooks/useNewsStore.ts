@@ -7,9 +7,12 @@ interface NewsStore {
   month: string;
   year: string;
   categoryNews: Record<string, CategoryNews>;
+  isBulkFetching: boolean;
+  bulkFetchProgress: { total: number; fetched: number; currentCategory: string };
   setMonth: (month: string) => void;
   setYear: (year: string) => void;
   fetchNews: (categoryId: string) => Promise<void>;
+  fetchAllNews: () => Promise<void>;
   toggleNewsSelection: (categoryId: string, newsId: string) => void;
   toggleNewsVerified: (categoryId: string, newsId: string) => void;
   updateNewsItem: (categoryId: string, newsId: string, updates: Partial<NewsItem>) => void;
@@ -26,6 +29,8 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
   month: 'November',
   year: '2025',
   categoryNews: {},
+  isBulkFetching: false,
+  bulkFetchProgress: { total: 0, fetched: 0, currentCategory: '' },
 
   setMonth: (month) => set({ month }),
   setYear: (year) => set({ year }),
@@ -116,6 +121,101 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
         },
       });
     }
+  },
+
+  fetchAllNews: async () => {
+    const { categoryNews, month, year } = get();
+    const categoryIds = Object.keys(categoryNews);
+    const totalCategories = categoryIds.length;
+
+    set({
+      isBulkFetching: true,
+      bulkFetchProgress: { total: totalCategories, fetched: 0, currentCategory: '' },
+    });
+
+    for (let i = 0; i < categoryIds.length; i++) {
+      const categoryId = categoryIds[i];
+      const category = categoryNews[categoryId];
+
+      set({
+        bulkFetchProgress: { 
+          total: totalCategories, 
+          fetched: i, 
+          currentCategory: category?.categoryName || '' 
+        },
+      });
+
+      // Update loading state for this category
+      set({
+        categoryNews: {
+          ...get().categoryNews,
+          [categoryId]: { ...get().categoryNews[categoryId], loading: true },
+        },
+      });
+
+      try {
+        const { data, error } = await supabase.functions.invoke('fetch-news', {
+          body: { 
+            category: category?.categoryName, 
+            month, 
+            year 
+          },
+        });
+
+        if (error) throw error;
+
+        const newsItems: NewsItem[] = (data.news || []).map((item: any, index: number) => ({
+          id: `${categoryId}-${index}-${Date.now()}`,
+          headline: item.headline || '',
+          date: item.date || '',
+          description: item.description || '',
+          examHints: {
+            what: item.examHints?.what || '',
+            who: item.examHints?.who || '',
+            where: item.examHints?.where || '',
+            when: item.examHints?.when || '',
+            why: item.examHints?.why || '',
+            numbers: item.examHints?.numbers || [],
+            ministry: item.examHints?.ministry || '',
+            relatedSchemes: item.examHints?.relatedSchemes || [],
+          },
+          source: item.source || '',
+          verified: false,
+          selected: false,
+          categoryId,
+          sectionId: category?.sectionId || '',
+        }));
+
+        set({
+          categoryNews: {
+            ...get().categoryNews,
+            [categoryId]: {
+              ...get().categoryNews[categoryId],
+              news: newsItems,
+              loading: false,
+              fetched: true,
+            },
+          },
+        });
+      } catch (error) {
+        console.error('Error fetching news for category:', categoryId, error);
+        set({
+          categoryNews: {
+            ...get().categoryNews,
+            [categoryId]: { 
+              ...get().categoryNews[categoryId], 
+              loading: false, 
+              fetched: true 
+            },
+          },
+        });
+      }
+    }
+
+    set({
+      isBulkFetching: false,
+      bulkFetchProgress: { total: totalCategories, fetched: totalCategories, currentCategory: '' },
+    });
   },
 
   toggleNewsSelection: (categoryId, newsId) => {
