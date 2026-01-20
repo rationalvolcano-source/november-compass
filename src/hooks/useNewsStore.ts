@@ -32,6 +32,11 @@ async function fetchNewsWithFallback(params: { category: string; month: string; 
       console.warn('Puter.js failed, falling back to edge function:', puterError);
     }
   } else {
+    toast({
+      title: "Free AI unavailable",
+      description: "Puter.js couldn't load (often blocked by ad blockers). Allow https://js.puter.com and retry, or add AI credits to use the backup provider.",
+      variant: "destructive",
+    });
     console.log('Puter SDK not available, using edge function...');
   }
 
