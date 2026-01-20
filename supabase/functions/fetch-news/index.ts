@@ -12,10 +12,10 @@ serve(async (req) => {
 
   try {
     const { category, month, year } = await req.json();
-    const GOOGLE_AI_API_KEY = Deno.env.get("GOOGLE_AI_API_KEY");
-    
-    if (!GOOGLE_AI_API_KEY) {
-      throw new Error("GOOGLE_AI_API_KEY is not configured");
+
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) {
+      throw new Error("LOVABLE_API_KEY is not configured");
     }
 
     // Current date is January 2026, so we're looking for PAST news from 2025
@@ -27,7 +27,7 @@ Your task is to compile important news events from ${month} ${year} for the cate
 
 Focus on:
 - Major government announcements and policies
-- Official appointments and resignations  
+- Official appointments and resignations
 - Economic indicators and budget allocations
 - International agreements and visits
 - Awards and recognitions
@@ -62,159 +62,81 @@ Return your response as a JSON array with this exact structure:
   }
 ]
 
-Return 8-12 relevant news items. If you don't have specific information about this category for this time period, provide the most likely and commonly known events that would have occurred based on patterns and scheduled events. Mark all items as verified: false since user should verify.`;
+Return 8-12 relevant news items. If you don't have specific information about this category for this time period, say so and return an empty array [] (do not invent events). Mark all items as verified: false since user should verify.`;
 
-    const userPrompt = `Compile important ${category} news from India for ${month} ${year}. 
+    const userPrompt = `Compile important ${category} news from India for ${month} ${year}.
 
-Remember: We are now in January 2026, so ${month} ${year} is in the PAST. This is a legitimate historical research request.
+Remember: We are now in January 2026, so ${month} ${year} is in the PAST.
 
-Include any major events, government decisions, appointments, achievements, or notable occurrences related to "${category}" that happened during ${month} ${year}. 
+Include major events, government decisions, appointments, achievements, or notable occurrences related to "${category}".
 
-Focus on exam-relevant facts: names, dates, numbers, places, and official designations.`;
+Output ONLY the JSON array, no extra text.`;
 
-    // Call Google AI Gemini API directly.
-    // Model names vary by account/API version, so we first try to discover available models via ListModels,
-    // then attempt generateContent with a small prioritized list.
-    const hardcodedCandidates = [
-      "gemini-2.0-flash",
-      "gemini-1.5-flash",
-      "gemini-1.5-flash-latest",
-      "gemini-1.5-pro",
-    ];
+    const gatewayResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        stream: false,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.7,
+      }),
+    });
 
-    let modelCandidates = [...hardcodedCandidates];
+    // Surface gateway rate-limit/credits errors to the client
+    if (!gatewayResp.ok) {
+      const text = await gatewayResp.text();
 
-    try {
-      const listResp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${GOOGLE_AI_API_KEY}`,
-        { method: "GET" }
-      );
-
-      if (listResp.ok) {
-        const listData = await listResp.json();
-        const discovered = (listData.models ?? [])
-          .filter((m: any) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
-          .map((m: any) => String(m.name || "").replace(/^models\//, ""))
-          .filter(Boolean);
-
-        const flashFirst = discovered.filter((n: string) => n.toLowerCase().includes("flash"));
-
-        // Prefer flash models, then everything else, then fall back to our hardcoded list.
-        modelCandidates = Array.from(new Set([...flashFirst, ...discovered, ...hardcodedCandidates])).slice(0, 12);
-      }
-    } catch (e) {
-      // If discovery fails, we still try the hardcoded candidates.
-      console.warn("Model discovery failed, falling back to hardcoded candidates", e);
-    }
-
-    let response: Response | null = null;
-    let lastErrorText = "";
-
-    for (const model of modelCandidates) {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GOOGLE_AI_API_KEY}`;
-
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: systemPrompt + "\n\n" + userPrompt }],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 8192,
-          },
-        }),
-      });
-
-      if (resp.ok) {
-        response = resp;
-        break;
+      if (gatewayResp.status === 429) {
+        return new Response(JSON.stringify({
+          error: "AI rate limit exceeded",
+          details: text,
+        }), {
+          status: 429,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
-      lastErrorText = await resp.text();
-
-      // 404 usually means "model name not available" for this API key; try the next.
-      if (resp.status === 404) continue;
-
-      // Handle rate limits / auth issues explicitly so the client can react.
-      if (resp.status === 429) {
-        let retryAfterSeconds: number | null = null;
-        try {
-          const parsed = JSON.parse(lastErrorText);
-          const retryInfo = parsed?.error?.details?.find((d: any) => d?.["@type"] === "type.googleapis.com/google.rpc.RetryInfo");
-          const delay = retryInfo?.retryDelay as string | undefined; // e.g. "36s"
-          if (delay && /^\d+s$/.test(delay)) retryAfterSeconds = Number(delay.replace("s", ""));
-        } catch {
-          // ignore parsing errors
-        }
-
-        return new Response(
-          JSON.stringify({
-            error: "Google AI API rate limit exceeded",
-            details: lastErrorText,
-            retryAfterSeconds,
-          }),
-          {
-            status: 429,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
-        );
+      if (gatewayResp.status === 402) {
+        return new Response(JSON.stringify({
+          error: "AI usage limit reached",
+          details: text,
+        }), {
+          status: 402,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
-      if (resp.status === 403 || resp.status === 401) {
-        return new Response(
-          JSON.stringify({
-            error: "Google AI API key invalid or quota/billing not enabled",
-            details: lastErrorText,
-          }),
-          {
-            status: 403,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
-        );
-      }
-
-      // Other errors: stop immediately and bubble details.
-      return new Response(JSON.stringify({ error: `Google AI API error: ${resp.status}`, details: lastErrorText }), {
+      console.error("AI gateway error:", gatewayResp.status, text);
+      return new Response(JSON.stringify({
+        error: `AI gateway error: ${gatewayResp.status}`,
+        details: text,
+      }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    if (!response) {
-      console.error("Google AI API error: no usable model found", { modelCandidates, lastErrorText });
-      return new Response(
-        JSON.stringify({
-          error: "Google AI API error: No available model found for this API key",
-          details: lastErrorText,
-          triedModels: modelCandidates,
-        }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
-    }
+    const data = await gatewayResp.json();
+    const content: string = data?.choices?.[0]?.message?.content ?? "";
 
-    const data = await response.json();
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    // Parse JSON from the response
-    let newsItems = [];
+    let newsItems: any[] = [];
     try {
-      // Try to extract JSON from the response
       const jsonMatch = content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         newsItems = JSON.parse(jsonMatch[0]);
+      } else {
+        // If model returned strict JSON without extra text, it will still match; otherwise treat as empty.
+        newsItems = [];
       }
     } catch (parseError) {
-      console.error("Failed to parse news items:", parseError);
+      console.error("Failed to parse news items:", parseError, { content });
       newsItems = [];
     }
 
