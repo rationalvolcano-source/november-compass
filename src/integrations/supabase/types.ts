@@ -14,16 +14,211 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      draft_items: {
+        Row: {
+          category: string
+          created_at: string
+          hash: string
+          id: string
+          month: number
+          published_at: string | null
+          section: string
+          snippet: string | null
+          source: string
+          title: string
+          url: string | null
+          year: number
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          hash: string
+          id?: string
+          month: number
+          published_at?: string | null
+          section: string
+          snippet?: string | null
+          source: string
+          title: string
+          url?: string | null
+          year: number
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          hash?: string
+          id?: string
+          month?: number
+          published_at?: string | null
+          section?: string
+          snippet?: string | null
+          source?: string
+          title?: string
+          url?: string | null
+          year?: number
+        }
+        Relationships: []
+      }
+      enriched_items: {
+        Row: {
+          created_at: string
+          draft_id: string
+          exam_points: Json
+          id: string
+          mcqs: Json | null
+          model: string
+          prompt_version: number
+          summary: string
+          token_cost_est: number | null
+        }
+        Insert: {
+          created_at?: string
+          draft_id: string
+          exam_points?: Json
+          id?: string
+          mcqs?: Json | null
+          model: string
+          prompt_version?: number
+          summary: string
+          token_cost_est?: number | null
+        }
+        Update: {
+          created_at?: string
+          draft_id?: string
+          exam_points?: Json
+          id?: string
+          mcqs?: Json | null
+          model?: string
+          prompt_version?: number
+          summary?: string
+          token_cost_est?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "enriched_items_draft_id_fkey"
+            columns: ["draft_id"]
+            isOneToOne: true
+            referencedRelation: "draft_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      entitlements: {
+        Row: {
+          created_at: string
+          enrich_quota_daily: number
+          export_enabled: boolean
+          id: string
+          plan: Database["public"]["Enums"]["user_plan"]
+          razorpay_order_id: string | null
+          razorpay_payment_id: string | null
+          user_id: string
+          valid_from: string
+          valid_to: string | null
+        }
+        Insert: {
+          created_at?: string
+          enrich_quota_daily?: number
+          export_enabled?: boolean
+          id?: string
+          plan?: Database["public"]["Enums"]["user_plan"]
+          razorpay_order_id?: string | null
+          razorpay_payment_id?: string | null
+          user_id: string
+          valid_from?: string
+          valid_to?: string | null
+        }
+        Update: {
+          created_at?: string
+          enrich_quota_daily?: number
+          export_enabled?: boolean
+          id?: string
+          plan?: Database["public"]["Enums"]["user_plan"]
+          razorpay_order_id?: string | null
+          razorpay_payment_id?: string | null
+          user_id?: string
+          valid_from?: string
+          valid_to?: string | null
+        }
+        Relationships: []
+      }
+      usage_daily: {
+        Row: {
+          date: string
+          draft_fetch_count: number
+          enrich_count: number
+          export_count: number
+          id: string
+          user_id: string
+        }
+        Insert: {
+          date?: string
+          draft_fetch_count?: number
+          enrich_count?: number
+          export_count?: number
+          id?: string
+          user_id: string
+        }
+        Update: {
+          date?: string
+          draft_fetch_count?: number
+          enrich_count?: number
+          export_count?: number
+          id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_or_create_daily_usage: {
+        Args: { p_user_id: string }
+        Returns: {
+          date: string
+          draft_fetch_count: number
+          enrich_count: number
+          export_count: number
+          id: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "usage_daily"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      get_user_entitlement: {
+        Args: { p_user_id: string }
+        Returns: {
+          enrich_quota_daily: number
+          export_enabled: boolean
+          plan: Database["public"]["Enums"]["user_plan"]
+        }[]
+      }
+      increment_usage: {
+        Args: { p_amount?: number; p_field: string; p_user_id: string }
+        Returns: {
+          date: string
+          draft_fetch_count: number
+          enrich_count: number
+          export_count: number
+          id: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "usage_daily"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
     }
     Enums: {
-      [_ in never]: never
+      user_plan: "free" | "pro"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +345,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      user_plan: ["free", "pro"],
+    },
   },
 } as const
