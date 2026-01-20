@@ -12,7 +12,7 @@ type InvokeError = {
 } & Error;
 
 async function invokeFetchNewsWithBackoff(params: { category: string; month: string; year: string }) {
-  // Free-tier Gemini quotas are very tight; a small backoff prevents error loops.
+  // Free-tier quotas are very tight; a small backoff prevents error loops.
   const MAX_RETRIES = 3;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -23,6 +23,11 @@ async function invokeFetchNewsWithBackoff(params: { category: string; month: str
     const err = error as unknown as InvokeError;
     const status = err?.context?.status;
     const body = err?.context?.body;
+
+    // If the AI provider requires credits (402), retries won't help.
+    if (status === 402) {
+      throw error;
+    }
 
     // If it's a daily quota exhaustion, retries won't help.
     if (status === 429 && typeof body?.details === "string" && body.details.includes("PerDay")) {
@@ -153,7 +158,13 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
       const status = err?.context?.status;
       const body = err?.context?.body;
 
-      if (status === 429) {
+      if (status === 402) {
+        toast({
+          title: "AI usage limit reached",
+          description: "Not enough AI credits. Add more usage credits in the backend settings and try again.",
+          variant: "destructive",
+        });
+      } else if (status === 429) {
         const retryAfterSeconds = typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : null;
         toast({
           title: "Rate limit hit",
@@ -165,6 +176,7 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
         toast({
           title: "Failed to fetch news",
           description: typeof body?.error === "string" ? body.error : "Please try again.",
+          variant: "destructive",
         });
       }
 
