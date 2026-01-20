@@ -1,13 +1,12 @@
 import { useEffect } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { CURRENT_AFFAIRS_SECTIONS } from "@/lib/categories";
 import { SectionAccordion } from "@/components/SectionAccordion";
 import { PDFExport } from "@/components/PDFExport";
 import { useNewsStore } from "@/hooks/useNewsStore";
-import { BulkFetchLoader } from "@/components/BulkFetchLoader";
-import { FileText, Zap, CheckSquare, Square, Rocket } from "lucide-react";
+import { FileText, Zap, CheckSquare, Square, Info } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -25,9 +24,6 @@ const Index = () => {
     initializeCategories, 
     selectAllNews, 
     getTotalCounts,
-    fetchAllNews,
-    isBulkFetching,
-    bulkFetchProgress
   } = useNewsStore();
   
   useEffect(() => {
@@ -63,7 +59,7 @@ const Index = () => {
           {/* Centerpiece Date Selector */}
           <div className="flex flex-col items-center gap-6">
             <div className="flex items-center gap-4 p-6 rounded-2xl bg-card/50 backdrop-blur-sm border border-primary/30 neon-glow">
-              <Select value={month} onValueChange={setMonth} disabled={isBulkFetching}>
+              <Select value={month} onValueChange={setMonth}>
                 <SelectTrigger className="w-[180px] h-14 text-lg font-semibold bg-background/50 border-primary/50 focus:ring-primary">
                   <SelectValue placeholder="Month" />
                 </SelectTrigger>
@@ -76,7 +72,7 @@ const Index = () => {
               
               <span className="text-3xl font-bold text-primary">–</span>
               
-              <Select value={year} onValueChange={setYear} disabled={isBulkFetching}>
+              <Select value={year} onValueChange={setYear}>
                 <SelectTrigger className="w-[120px] h-14 text-lg font-semibold bg-background/50 border-primary/50 focus:ring-primary">
                   <SelectValue placeholder="Year" />
                 </SelectTrigger>
@@ -88,19 +84,11 @@ const Index = () => {
               </Select>
             </div>
 
-            {/* GO Button */}
-            <Button
-              size="lg"
-              onClick={() => {
-                // Avoid unhandled promise rejections from async click handlers
-                fetchAllNews().catch(() => {});
-              }}
-              disabled={isBulkFetching}
-              className="h-14 px-12 text-xl font-bold bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 neon-glow gap-3 transition-all hover:scale-105"
-            >
-              <Rocket className="h-6 w-6" />
-              GO!
-            </Button>
+            {/* Instructions */}
+            <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary/10 border border-primary/20 text-sm text-muted-foreground">
+              <Info className="h-4 w-4 text-primary shrink-0" />
+              <span>Expand sections below and click <strong className="text-primary">Fetch</strong> on each topic to load news</span>
+            </div>
             
             <div className="flex items-center gap-4">
               <Badge variant="outline" className="px-4 py-2 text-sm border-muted-foreground/30">
@@ -123,21 +111,20 @@ const Index = () => {
         </div>
       </div>
 
-      {/* Bulk Fetch Loading State */}
-      {isBulkFetching && (
-        <div className="border-b border-border/50 bg-card/30">
-          <div className="container mx-auto">
-            <BulkFetchLoader 
-              totalCategories={bulkFetchProgress.total}
-              fetchedCount={bulkFetchProgress.fetched}
-              activeCategories={bulkFetchProgress.activeCategories}
-            />
+      {/* Rate Limit Info Banner */}
+      <div className="border-b border-border/50 bg-amber-500/10">
+        <div className="container mx-auto px-4 py-3">
+          <div className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
+            <Info className="h-4 w-4 shrink-0" />
+            <span>
+              <strong>Tip:</strong> Due to API rate limits, fetch topics one at a time and wait 30-60 seconds between fetches for best results.
+            </span>
           </div>
         </div>
-      )}
+      </div>
 
-      {/* Export Bar - only show when not fetching and has news */}
-      {!isBulkFetching && total > 0 && (
+      {/* Export Bar - only show when has news */}
+      {total > 0 && (
         <div className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-md">
           <div className="container mx-auto px-4 py-3 flex items-center justify-between">
             <Button
@@ -163,16 +150,14 @@ const Index = () => {
         </div>
       )}
 
-      {/* Sections - only show when not fetching */}
-      {!isBulkFetching && (
-        <main className="container mx-auto px-4 py-6">
-          <div className="space-y-3">
-            {CURRENT_AFFAIRS_SECTIONS.map(section => (
-              <SectionAccordion key={section.id} section={section} />
-            ))}
-          </div>
-        </main>
-      )}
+      {/* Sections */}
+      <main className="container mx-auto px-4 py-6">
+        <div className="space-y-3">
+          {CURRENT_AFFAIRS_SECTIONS.map(section => (
+            <SectionAccordion key={section.id} section={section} />
+          ))}
+        </div>
+      </main>
 
       {/* Footer */}
       <footer className="border-t border-border/50 mt-12 py-6 bg-card/30">

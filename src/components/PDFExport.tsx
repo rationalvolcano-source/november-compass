@@ -1,11 +1,15 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { FileDown } from "lucide-react";
+import { FileDown, Lock } from "lucide-react";
 import { useNewsStore } from "@/hooks/useNewsStore";
 import { CURRENT_AFFAIRS_SECTIONS } from "@/lib/categories";
 import { NewsItem } from "@/types/news";
+import { PaymentDialog } from "./PaymentDialog";
 
 export const PDFExport = () => {
   const { getSelectedNews, month, year, categoryNews } = useNewsStore();
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false);
+  const [isPaid, setIsPaid] = useState(false);
   
   const selectedNews = getSelectedNews();
   
@@ -131,10 +135,48 @@ export const PDFExport = () => {
     }
   };
 
+  const handleExportClick = () => {
+    if (isPaid) {
+      handleExport();
+    } else {
+      setShowPaymentDialog(true);
+    }
+  };
+
+  const handlePaymentSuccess = () => {
+    setIsPaid(true);
+    // Automatically trigger export after payment
+    setTimeout(() => {
+      handleExport();
+    }, 300);
+  };
+
   return (
-    <Button onClick={handleExport} disabled={selectedNews.length === 0} className="neon-glow">
-      <FileDown className="h-4 w-4 mr-2" />
-      Export PDF ({selectedNews.length})
-    </Button>
+    <>
+      <Button 
+        onClick={handleExportClick} 
+        disabled={selectedNews.length === 0} 
+        className="neon-glow gap-2"
+      >
+        {isPaid ? (
+          <>
+            <FileDown className="h-4 w-4" />
+            Export PDF ({selectedNews.length})
+          </>
+        ) : (
+          <>
+            <Lock className="h-4 w-4" />
+            Export PDF ₹99 ({selectedNews.length})
+          </>
+        )}
+      </Button>
+
+      <PaymentDialog
+        open={showPaymentDialog}
+        onOpenChange={setShowPaymentDialog}
+        onPaymentSuccess={handlePaymentSuccess}
+        itemCount={selectedNews.length}
+      />
+    </>
   );
 };
