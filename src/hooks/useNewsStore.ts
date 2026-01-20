@@ -1,114 +1,101 @@
 import { create } from 'zustand';
-import { NewsItem, CategoryNews } from '@/types/news';
-import { CURRENT_AFFAIRS_SECTIONS } from '@/lib/categories';
 import { supabase } from '@/integrations/supabase/client';
-import { toast } from "@/hooks/use-toast";
-import { fetchNewsWithPuter, loadPuterSDK, ensurePuterLoaded } from '@/lib/puterAI';
+import { CURRENT_AFFAIRS_SECTIONS } from '@/lib/categories';
+import { toast } from '@/hooks/use-toast';
+import type { NewsItem, CategoryNews, DraftItem, EnrichedItem, UserEntitlement, DailyUsage } from '@/types/news';
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// Helper function to convert month name to number
+const monthNameToNumber = (monthName: string): number => {
+  const months: Record<string, number> = {
+    'January': 1, 'February': 2, 'March': 3, 'April': 4,
+    'May': 5, 'June': 6, 'July': 7, 'August': 8,
+    'September': 9, 'October': 10, 'November': 11, 'December': 12
+  };
+  return months[monthName] || 1;
+};
 
-type InvokeError = {
-  message?: string;
-  context?: { status?: number; body?: any };
-} & Error;
+// Convert draft item to display NewsItem
+const draftToNewsItem = (
+  draft: DraftItem, 
+  sectionId: string, 
+  categoryId: string,
+  enrichment?: EnrichedItem
+): NewsItem => {
+  return {
+    id: draft.id,
+    headline: draft.title,
+    date: draft.published_at 
+      ? new Date(draft.published_at).toLocaleDateString('en-IN', { 
+          day: 'numeric', month: 'short', year: 'numeric' 
+        })
+      : 'Date unknown',
+    description: enrichment?.summary || draft.snippet || '',
+    examHints: {
+      what: enrichment?.exam_points?.[0],
+      numbers: enrichment?.exam_points?.slice(1) || [],
+    },
+    source: draft.source,
+    verified: false,
+    selected: false,
+    categoryId,
+    sectionId,
+    draftId: draft.id,
+    url: draft.url || undefined,
+    enriched: !!enrichment,
+    enrichment,
+  };
+};
 
-// Initialize Puter SDK early
-loadPuterSDK().catch(console.warn);
-
-/**
- * Primary fetch method using Puter.js (free, unlimited via Perplexity)
- * Falls back to edge function if Puter fails
- */
-async function fetchNewsWithFallback(params: { category: string; month: string; year: string }) {
-  // Try to ensure Puter is loaded, then use it
-  const puterReady = await ensurePuterLoaded();
-  
-  if (puterReady) {
-    try {
-      console.log('Fetching with Puter.js (free Perplexity AI)...');
-      const result = await fetchNewsWithPuter(params.category, params.month, params.year);
-      return { data: result, source: 'puter' as const };
-    } catch (puterError) {
-      console.warn('Puter.js failed, falling back to edge function:', puterError);
-    }
-  } else {
-    toast({
-      title: "Free AI unavailable",
-      description: "Puter.js couldn't load (often blocked by ad blockers). Allow https://js.puter.com and retry, or add AI credits to use the backup provider.",
-      variant: "destructive",
-    });
-    console.log('Puter SDK not available, using edge function...');
-  }
-
-  // Fallback to edge function with backoff
-  return invokeFetchNewsWithBackoff(params);
-}
-
-async function invokeFetchNewsWithBackoff(params: { category: string; month: string; year: string }) {
-  // Free-tier quotas are very tight; a small backoff prevents error loops.
-  const MAX_RETRIES = 3;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const { data, error } = await supabase.functions.invoke("fetch-news", { body: params });
-
-    if (!error) return { data, source: 'edge' as const };
-
-    const err = error as unknown as InvokeError;
-    const status = err?.context?.status;
-    const body = err?.context?.body;
-
-    // If the AI provider requires credits (402), retries won't help.
-    if (status === 402) {
-      throw error;
-    }
-
-    // If it's a daily quota exhaustion, retries won't help.
-    if (status === 429 && typeof body?.details === "string" && body.details.includes("PerDay")) {
-      throw error;
-    }
-
-    if (status === 429 && attempt < MAX_RETRIES) {
-      const retryAfterSeconds =
-        typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : 20;
-      await sleep((retryAfterSeconds + 1) * 1000);
-      continue;
-    }
-
-    throw error;
-  }
-
-  // Should never reach here
-  throw new Error("Failed to fetch news after retries");
+interface BulkFetchProgress {
+  total: number;
+  fetched: number;
+  activeCategories: string[];
 }
 
 interface NewsStore {
+  // State
   month: string;
   year: string;
   categoryNews: Record<string, CategoryNews>;
   isBulkFetching: boolean;
-  bulkFetchProgress: { total: number; fetched: number; activeCategories: string[] };
+  bulkFetchProgress: BulkFetchProgress;
+  entitlement: UserEntitlement | null;
+  usage: DailyUsage | null;
+  
+  // Actions
   setMonth: (month: string) => void;
   setYear: (year: string) => void;
-  fetchNews: (categoryId: string) => Promise<void>;
-  fetchAllNews: () => Promise<void>;
+  initializeCategories: () => void;
+  fetchDraft: (categoryId: string) => Promise<void>;
+  enrichSelected: (categoryId: string) => Promise<void>;
+  bulkFetchDrafts: (categoryIds: string[]) => Promise<void>;
   toggleNewsSelection: (categoryId: string, newsId: string) => void;
   toggleNewsVerified: (categoryId: string, newsId: string) => void;
-  updateNewsItem: (categoryId: string, newsId: string, updates: Partial<NewsItem>) => void;
   deleteNewsItem: (categoryId: string, newsId: string) => void;
+  updateNewsItem: (categoryId: string, newsId: string, updates: Partial<NewsItem>) => void;
+  selectAllInCategory: (categoryId: string, selected: boolean) => void;
+  selectAllInSection: (sectionId: string, selected: boolean) => void;
+  selectAllNews: (selected: boolean) => void;
   getSelectedNews: () => NewsItem[];
-  initializeCategories: () => void;
-  selectAllNews: (select: boolean) => void;
-  selectAllInSection: (sectionId: string, select: boolean) => void;
   getTotalCounts: () => { total: number; selected: number };
+  getCategoryCounts: (categoryId: string) => { total: number; selected: number };
   getSectionCounts: (sectionId: string) => { total: number; selected: number };
+  loadEntitlement: () => Promise<void>;
+  
+  // Legacy compatibility
+  fetchNews: (categoryId: string) => Promise<void>;
 }
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export const useNewsStore = create<NewsStore>((set, get) => ({
-  month: 'November',
-  year: '2025',
+  month: 'January',
+  year: '2026',
   categoryNews: {},
   isBulkFetching: false,
   bulkFetchProgress: { total: 0, fetched: 0, activeCategories: [] },
+  entitlement: null,
+  usage: null,
 
   setMonth: (month) => set({ month }),
   setYear: (year) => set({ year }),
@@ -126,14 +113,15 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
           news: [],
           loading: false,
           fetched: false,
+          enriching: false,
         };
       });
     });
-
+    
     set({ categoryNews });
   },
 
-  fetchNews: async (categoryId: string) => {
+  fetchDraft: async (categoryId: string) => {
     const { month, year, categoryNews } = get();
     const category = categoryNews[categoryId];
     
@@ -147,40 +135,37 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     });
 
     try {
-      const { data, source } = await fetchNewsWithFallback({
-        category: category.categoryName,
-        month,
-        year,
+      const monthNum = monthNameToNumber(month);
+      const yearNum = parseInt(year);
+
+      const { data, error } = await supabase.functions.invoke('fetch-draft', {
+        body: {
+          section: category.sectionId,
+          category: categoryId,
+          month: monthNum,
+          year: yearNum,
+        },
       });
 
-      if (source === 'puter') {
+      if (error) throw error;
+
+      const items: DraftItem[] = data?.items || [];
+      const newsItems = items.map(item => 
+        draftToNewsItem(item, category.sectionId, categoryId)
+      );
+
+      const source = data?.source || 'unknown';
+      if (source === 'cache') {
         toast({
-          title: "✨ Free AI",
-          description: "Fetched using Puter.js (no API costs!)",
+          title: "📦 Cached",
+          description: `Loaded ${newsItems.length} items from cache`,
+        });
+      } else {
+        toast({
+          title: "📰 Draft Built",
+          description: `Found ${newsItems.length} items from RSS feeds`,
         });
       }
-
-      const newsItems: NewsItem[] = (data.news || []).map((item: any, index: number) => ({
-        id: `${categoryId}-${index}-${Date.now()}`,
-        headline: item.headline || '',
-        date: item.date || '',
-        description: item.description || '',
-        examHints: {
-          what: item.examHints?.what || '',
-          who: item.examHints?.who || '',
-          where: item.examHints?.where || '',
-          when: item.examHints?.when || '',
-          why: item.examHints?.why || '',
-          numbers: item.examHints?.numbers || [],
-          ministry: item.examHints?.ministry || '',
-          relatedSchemes: item.examHints?.relatedSchemes || [],
-        },
-        source: item.source || '',
-        verified: false,
-        selected: false,
-        categoryId,
-        sectionId: category.sectionId,
-      }));
 
       set({
         categoryNews: {
@@ -193,186 +178,186 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
           },
         },
       });
+
     } catch (error) {
-      const err = error as any;
-      const status = err?.context?.status;
-      const body = err?.context?.body;
+      console.error('Error fetching draft:', error);
+      
+      toast({
+        title: "Fetch Failed",
+        description: error instanceof Error ? error.message : "Failed to fetch news",
+        variant: "destructive",
+      });
 
-      if (status === 402) {
-        toast({
-          title: "AI credits exhausted",
-          description: "Add more credits at Settings → Workspace → Usage to continue.",
-          variant: "destructive",
-        });
-      } else if (status === 429) {
-        const retryAfterSeconds = typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : null;
-        toast({
-          title: "Rate limit hit",
-          description: retryAfterSeconds
-            ? `Please wait ~${retryAfterSeconds}s and try again.`
-            : "Please wait a bit and try again.",
-        });
-      } else if (status === 503) {
-        toast({
-          title: "AI service busy",
-          description: "Temporary issue. Please try again in a few seconds.",
-        });
-      } else {
-        toast({
-          title: "Failed to fetch news",
-          description: typeof body?.error === "string" ? body.error : "Please try again.",
-          variant: "destructive",
-        });
-      }
-
-      console.error('Error fetching news:', error);
       set({
         categoryNews: {
           ...get().categoryNews,
-          [categoryId]: { ...category, loading: false, fetched: true },
+          [categoryId]: { ...category, loading: false },
         },
       });
     }
   },
 
-  fetchAllNews: async () => {
-    const { categoryNews, month, year } = get();
-    const categoryIds = Object.keys(categoryNews);
-    const totalCategories = categoryIds.length;
-    const CONCURRENCY = 1; // Keep low to avoid free-tier Gemini rate limits
+  enrichSelected: async (categoryId: string) => {
+    const { categoryNews } = get();
+    const category = categoryNews[categoryId];
+    
+    if (!category) return;
+
+    const selectedNews = category.news.filter(n => n.selected && !n.enriched);
+    if (selectedNews.length === 0) {
+      toast({
+        title: "Nothing to enrich",
+        description: "Select some items that haven't been enriched yet",
+      });
+      return;
+    }
+
+    // Limit to 5 items per request
+    const itemsToEnrich = selectedNews.slice(0, 5);
+    const draftIds = itemsToEnrich.map(n => n.draftId).filter(Boolean);
+
+    if (draftIds.length === 0) {
+      toast({
+        title: "Invalid items",
+        description: "Selected items don't have draft IDs",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    set({
+      categoryNews: {
+        ...categoryNews,
+        [categoryId]: { ...category, enriching: true },
+      },
+    });
+
+    try {
+      const { data, error } = await supabase.functions.invoke('enrich-items', {
+        body: { draft_ids: draftIds },
+      });
+
+      if (error) throw error;
+
+      const enrichments: EnrichedItem[] = data?.enrichments || [];
+      const enrichmentMap = new Map(enrichments.map(e => [e.draft_id, e]));
+
+      // Update news items with enrichments
+      const updatedNews = category.news.map(item => {
+        if (item.draftId && enrichmentMap.has(item.draftId)) {
+          const enrichment = enrichmentMap.get(item.draftId)!;
+          return {
+            ...item,
+            description: enrichment.summary,
+            examHints: {
+              what: enrichment.exam_points?.[0],
+              numbers: enrichment.exam_points?.slice(1) || [],
+            },
+            enriched: true,
+            enrichment,
+          };
+        }
+        return item;
+      });
+
+      toast({
+        title: "✨ Enriched",
+        description: `Enhanced ${enrichments.length} items with exam summaries`,
+      });
+
+      set({
+        categoryNews: {
+          ...get().categoryNews,
+          [categoryId]: {
+            ...category,
+            news: updatedNews,
+            enriching: false,
+          },
+        },
+      });
+
+    } catch (error) {
+      console.error('Error enriching items:', error);
+      
+      const errorMessage = error instanceof Error ? error.message : "Failed to enrich items";
+      
+      toast({
+        title: "Enrichment Failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
+
+      set({
+        categoryNews: {
+          ...get().categoryNews,
+          [categoryId]: { ...category, enriching: false },
+        },
+      });
+    }
+  },
+
+  bulkFetchDrafts: async (categoryIds: string[]) => {
+    const { categoryNews } = get();
+    
+    // Filter to only unfetched categories
+    const unfetched = categoryIds.filter(id => {
+      const cat = categoryNews[id];
+      return cat && !cat.fetched && !cat.loading;
+    });
+
+    if (unfetched.length === 0) {
+      toast({
+        title: "All fetched",
+        description: "All categories already have drafts",
+      });
+      return;
+    }
 
     set({
       isBulkFetching: true,
-      bulkFetchProgress: { total: totalCategories, fetched: 0, activeCategories: [] },
+      bulkFetchProgress: { total: unfetched.length, fetched: 0, activeCategories: [] },
     });
 
-    let fetchedCount = 0;
-    let rateLimitToastShown = false;
-
-    // Helper to fetch a single category
-    const fetchCategory = async (categoryId: string) => {
-      const category = get().categoryNews[categoryId];
-      if (!category) return;
-
-      // Add to active categories
+    // Process sequentially with delay to avoid rate limits
+    for (let i = 0; i < unfetched.length; i++) {
+      const catId = unfetched[i];
+      
       set({
         bulkFetchProgress: {
-          ...get().bulkFetchProgress,
-          activeCategories: [...get().bulkFetchProgress.activeCategories, category.categoryName],
-        },
-        categoryNews: {
-          ...get().categoryNews,
-          [categoryId]: { ...get().categoryNews[categoryId], loading: true },
+          total: unfetched.length,
+          fetched: i,
+          activeCategories: [catId],
         },
       });
 
-      try {
-        const { data } = await fetchNewsWithFallback({
-          category: category.categoryName,
-          month,
-          year,
-        });
-
-        const newsItems: NewsItem[] = (data.news || []).map((item: any, index: number) => ({
-          id: `${categoryId}-${index}-${Date.now()}`,
-          headline: item.headline || "",
-          date: item.date || "",
-          description: item.description || "",
-          examHints: {
-            what: item.examHints?.what || "",
-            who: item.examHints?.who || "",
-            where: item.examHints?.where || "",
-            when: item.examHints?.when || "",
-            why: item.examHints?.why || "",
-            numbers: item.examHints?.numbers || [],
-            ministry: item.examHints?.ministry || "",
-            relatedSchemes: item.examHints?.relatedSchemes || [],
-          },
-          source: item.source || "",
-          verified: false,
-          selected: false,
-          categoryId,
-          sectionId: category.sectionId,
-        }));
-
-        set({
-          categoryNews: {
-            ...get().categoryNews,
-            [categoryId]: {
-              ...get().categoryNews[categoryId],
-              news: newsItems,
-              loading: false,
-              fetched: true,
-            },
-          },
-        });
-      } catch (error) {
-        const err = error as any;
-        const status = err?.context?.status;
-        const body = err?.context?.body;
-
-        const isDailyQuota = status === 429 && typeof body?.details === "string" && body.details.includes("PerDay");
-
-        if (status === 429 && !rateLimitToastShown) {
-          rateLimitToastShown = true;
-          const retryAfterSeconds = typeof body?.retryAfterSeconds === "number" ? body.retryAfterSeconds : null;
-          toast({
-            title: isDailyQuota ? "Daily quota reached" : "Rate limit hit during bulk fetch",
-            description: isDailyQuota
-              ? "Google free tier daily limit is exhausted for today. Try tomorrow or enable billing."
-              : retryAfterSeconds
-                ? `Waiting ~${retryAfterSeconds}s before continuing...`
-                : "Waiting a bit before continuing...",
-          });
-        }
-
-        console.error("Error fetching news for category:", categoryId, error);
-
-        set({
-          categoryNews: {
-            ...get().categoryNews,
-            [categoryId]: { ...get().categoryNews[categoryId], loading: false, fetched: true },
-          },
-        });
-
-        // If daily quota is exhausted, abort the whole bulk run.
-        if (isDailyQuota) throw error;
-      } finally {
-        fetchedCount++;
-        const currentActive = get().bulkFetchProgress.activeCategories.filter((name) => name !== category.categoryName);
-        set({
-          bulkFetchProgress: {
-            total: totalCategories,
-            fetched: fetchedCount,
-            activeCategories: currentActive,
-          },
-        });
-
-        // Gentle pacing to stay within free-tier quotas
-        await sleep(1200);
+      await get().fetchDraft(catId);
+      
+      // Small delay between requests
+      if (i < unfetched.length - 1) {
+        await sleep(500);
       }
-    };
-
-    try {
-      // Process in batches with concurrency limit
-      for (let i = 0; i < categoryIds.length; i += CONCURRENCY) {
-        const batch = categoryIds.slice(i, i + CONCURRENCY);
-        await Promise.all(batch.map(fetchCategory));
-      }
-    } catch (e) {
-      // Ensure we don't leave the UI in a broken/loading state
-      console.error("Bulk fetch aborted:", e);
-    } finally {
-      set({
-        isBulkFetching: false,
-        bulkFetchProgress: { total: totalCategories, fetched: fetchedCount, activeCategories: [] },
-      });
     }
+
+    set({
+      isBulkFetching: false,
+      bulkFetchProgress: { total: unfetched.length, fetched: unfetched.length, activeCategories: [] },
+    });
+
+    toast({
+      title: "✅ Bulk fetch complete",
+      description: `Fetched drafts for ${unfetched.length} categories`,
+    });
   },
 
-  toggleNewsSelection: (categoryId, newsId) => {
+  // Legacy compatibility - alias for fetchDraft
+  fetchNews: async (categoryId: string) => {
+    return get().fetchDraft(categoryId);
+  },
+
+  toggleNewsSelection: (categoryId: string, newsId: string) => {
     const { categoryNews } = get();
     const category = categoryNews[categoryId];
+    
     if (!category) return;
 
     const updatedNews = category.news.map(item =>
@@ -387,9 +372,10 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     });
   },
 
-  toggleNewsVerified: (categoryId, newsId) => {
+  toggleNewsVerified: (categoryId: string, newsId: string) => {
     const { categoryNews } = get();
     const category = categoryNews[categoryId];
+    
     if (!category) return;
 
     const updatedNews = category.news.map(item =>
@@ -404,9 +390,26 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     });
   },
 
-  updateNewsItem: (categoryId, newsId, updates) => {
+  deleteNewsItem: (categoryId: string, newsId: string) => {
     const { categoryNews } = get();
     const category = categoryNews[categoryId];
+    
+    if (!category) return;
+
+    const updatedNews = category.news.filter(item => item.id !== newsId);
+
+    set({
+      categoryNews: {
+        ...categoryNews,
+        [categoryId]: { ...category, news: updatedNews },
+      },
+    });
+  },
+
+  updateNewsItem: (categoryId: string, newsId: string, updates: Partial<NewsItem>) => {
+    const { categoryNews } = get();
+    const category = categoryNews[categoryId];
+    
     if (!category) return;
 
     const updatedNews = category.news.map(item =>
@@ -421,12 +424,13 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     });
   },
 
-  deleteNewsItem: (categoryId, newsId) => {
+  selectAllInCategory: (categoryId: string, selected: boolean) => {
     const { categoryNews } = get();
     const category = categoryNews[categoryId];
+    
     if (!category) return;
 
-    const updatedNews = category.news.filter(item => item.id !== newsId);
+    const updatedNews = category.news.map(item => ({ ...item, selected }));
 
     set({
       categoryNews: {
@@ -436,51 +440,51 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     });
   },
 
+  selectAllInSection: (sectionId: string, selected: boolean) => {
+    const { categoryNews } = get();
+    const updatedCategoryNews = { ...categoryNews };
+
+    Object.keys(updatedCategoryNews).forEach(catId => {
+      const cat = updatedCategoryNews[catId];
+      if (cat.sectionId === sectionId) {
+        updatedCategoryNews[catId] = {
+          ...cat,
+          news: cat.news.map(item => ({ ...item, selected })),
+        };
+      }
+    });
+
+    set({ categoryNews: updatedCategoryNews });
+  },
+
+  selectAllNews: (selected: boolean) => {
+    const { categoryNews } = get();
+    const updatedCategoryNews = { ...categoryNews };
+
+    Object.keys(updatedCategoryNews).forEach(catId => {
+      const cat = updatedCategoryNews[catId];
+      updatedCategoryNews[catId] = {
+        ...cat,
+        news: cat.news.map(item => ({ ...item, selected })),
+      };
+    });
+
+    set({ categoryNews: updatedCategoryNews });
+  },
+
   getSelectedNews: () => {
     const { categoryNews } = get();
-    const selectedNews: NewsItem[] = [];
+    const selected: NewsItem[] = [];
 
-    Object.values(categoryNews).forEach(category => {
-      category.news.forEach(item => {
+    Object.values(categoryNews).forEach(cat => {
+      cat.news.forEach(item => {
         if (item.selected) {
-          selectedNews.push(item);
+          selected.push(item);
         }
       });
     });
 
-    return selectedNews;
-  },
-
-  selectAllNews: (select: boolean) => {
-    const { categoryNews } = get();
-    const updated: Record<string, CategoryNews> = {};
-
-    Object.entries(categoryNews).forEach(([key, category]) => {
-      updated[key] = {
-        ...category,
-        news: category.news.map(item => ({ ...item, selected: select })),
-      };
-    });
-
-    set({ categoryNews: updated });
-  },
-
-  selectAllInSection: (sectionId: string, select: boolean) => {
-    const { categoryNews } = get();
-    const updated: Record<string, CategoryNews> = {};
-
-    Object.entries(categoryNews).forEach(([key, category]) => {
-      if (category.sectionId === sectionId) {
-        updated[key] = {
-          ...category,
-          news: category.news.map(item => ({ ...item, selected: select })),
-        };
-      } else {
-        updated[key] = category;
-      }
-    });
-
-    set({ categoryNews: updated });
+    return selected;
   },
 
   getTotalCounts: () => {
@@ -488,12 +492,24 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     let total = 0;
     let selected = 0;
 
-    Object.values(categoryNews).forEach(category => {
-      total += category.news.length;
-      selected += category.news.filter(n => n.selected).length;
+    Object.values(categoryNews).forEach(cat => {
+      total += cat.news.length;
+      selected += cat.news.filter(n => n.selected).length;
     });
 
     return { total, selected };
+  },
+
+  getCategoryCounts: (categoryId: string) => {
+    const { categoryNews } = get();
+    const category = categoryNews[categoryId];
+    
+    if (!category) return { total: 0, selected: 0 };
+
+    return {
+      total: category.news.length,
+      selected: category.news.filter(n => n.selected).length,
+    };
   },
 
   getSectionCounts: (sectionId: string) => {
@@ -501,13 +517,41 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     let total = 0;
     let selected = 0;
 
-    Object.values(categoryNews).forEach(category => {
-      if (category.sectionId === sectionId) {
-        total += category.news.length;
-        selected += category.news.filter(n => n.selected).length;
+    Object.values(categoryNews).forEach(cat => {
+      if (cat.sectionId === sectionId) {
+        total += cat.news.length;
+        selected += cat.news.filter(n => n.selected).length;
       }
     });
 
     return { total, selected };
+  },
+
+  loadEntitlement: async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        set({ entitlement: { plan: 'free', export_enabled: false, enrich_quota_daily: 10 } });
+        return;
+      }
+
+      // Fetch entitlement using the database function
+      const { data } = await supabase.rpc('get_user_entitlement', { p_user_id: user.id });
+      
+      if (data && data.length > 0) {
+        set({
+          entitlement: {
+            plan: data[0].plan,
+            export_enabled: data[0].export_enabled,
+            enrich_quota_daily: data[0].enrich_quota_daily,
+          },
+        });
+      } else {
+        set({ entitlement: { plan: 'free', export_enabled: false, enrich_quota_daily: 10 } });
+      }
+    } catch (error) {
+      console.error('Error loading entitlement:', error);
+      set({ entitlement: { plan: 'free', export_enabled: false, enrich_quota_daily: 10 } });
+    }
   },
 }));
