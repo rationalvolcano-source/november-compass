@@ -6,7 +6,8 @@ import { CURRENT_AFFAIRS_SECTIONS } from "@/lib/categories";
 import { SectionAccordion } from "@/components/SectionAccordion";
 import { PDFExport } from "@/components/PDFExport";
 import { useNewsStore } from "@/hooks/useNewsStore";
-import { FileText, Zap, CheckSquare, Square } from "lucide-react";
+import { BulkFetchLoader } from "@/components/BulkFetchLoader";
+import { FileText, Zap, CheckSquare, Square, Rocket } from "lucide-react";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -16,7 +17,18 @@ const MONTHS = [
 const YEARS = ["2024", "2025", "2026"];
 
 const Index = () => {
-  const { month, year, setMonth, setYear, initializeCategories, getSelectedNews, selectAllNews, getTotalCounts } = useNewsStore();
+  const { 
+    month, 
+    year, 
+    setMonth, 
+    setYear, 
+    initializeCategories, 
+    selectAllNews, 
+    getTotalCounts,
+    fetchAllNews,
+    isBulkFetching,
+    bulkFetchProgress
+  } = useNewsStore();
   
   useEffect(() => {
     initializeCategories();
@@ -24,6 +36,7 @@ const Index = () => {
 
   const { total, selected: selectedCount } = getTotalCounts();
   const allSelected = total > 0 && selectedCount === total;
+  const totalCategories = CURRENT_AFFAIRS_SECTIONS.reduce((sum, s) => sum + s.categories.length, 0);
 
   return (
     <div className="min-h-screen bg-background">
@@ -50,7 +63,7 @@ const Index = () => {
           {/* Centerpiece Date Selector */}
           <div className="flex flex-col items-center gap-6">
             <div className="flex items-center gap-4 p-6 rounded-2xl bg-card/50 backdrop-blur-sm border border-primary/30 neon-glow">
-              <Select value={month} onValueChange={setMonth}>
+              <Select value={month} onValueChange={setMonth} disabled={isBulkFetching}>
                 <SelectTrigger className="w-[180px] h-14 text-lg font-semibold bg-background/50 border-primary/50 focus:ring-primary">
                   <SelectValue placeholder="Month" />
                 </SelectTrigger>
@@ -63,7 +76,7 @@ const Index = () => {
               
               <span className="text-3xl font-bold text-primary">–</span>
               
-              <Select value={year} onValueChange={setYear}>
+              <Select value={year} onValueChange={setYear} disabled={isBulkFetching}>
                 <SelectTrigger className="w-[120px] h-14 text-lg font-semibold bg-background/50 border-primary/50 focus:ring-primary">
                   <SelectValue placeholder="Year" />
                 </SelectTrigger>
@@ -74,6 +87,17 @@ const Index = () => {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* GO Button */}
+            <Button
+              size="lg"
+              onClick={fetchAllNews}
+              disabled={isBulkFetching}
+              className="h-14 px-12 text-xl font-bold bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 neon-glow gap-3 transition-all hover:scale-105"
+            >
+              <Rocket className="h-6 w-6" />
+              GO!
+            </Button>
             
             <div className="flex items-center gap-4">
               <Badge variant="outline" className="px-4 py-2 text-sm border-muted-foreground/30">
@@ -81,23 +105,38 @@ const Index = () => {
                 {CURRENT_AFFAIRS_SECTIONS.length} Sections
               </Badge>
               <Badge variant="outline" className="px-4 py-2 text-sm border-muted-foreground/30">
-                {CURRENT_AFFAIRS_SECTIONS.reduce((sum, s) => sum + s.categories.length, 0)} Categories
+                {totalCategories} Categories
               </Badge>
-              <Badge 
-                variant={selectedCount > 0 ? "default" : "outline"} 
-                className={`px-4 py-2 text-sm ${selectedCount > 0 ? 'neon-glow' : 'border-muted-foreground/30'}`}
-              >
-                {selectedCount} Selected
-              </Badge>
+              {total > 0 && (
+                <Badge 
+                  variant={selectedCount > 0 ? "default" : "outline"} 
+                  className={`px-4 py-2 text-sm ${selectedCount > 0 ? 'neon-glow' : 'border-muted-foreground/30'}`}
+                >
+                  {selectedCount} Selected
+                </Badge>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Export Bar */}
-      <div className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-md">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          {total > 0 && (
+      {/* Bulk Fetch Loading State */}
+      {isBulkFetching && (
+        <div className="border-b border-border/50 bg-card/30">
+          <div className="container mx-auto">
+            <BulkFetchLoader 
+              totalCategories={bulkFetchProgress.total}
+              fetchedCount={bulkFetchProgress.fetched}
+              currentCategory={bulkFetchProgress.currentCategory}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Export Bar - only show when not fetching and has news */}
+      {!isBulkFetching && total > 0 && (
+        <div className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-md">
+          <div className="container mx-auto px-4 py-3 flex items-center justify-between">
             <Button
               variant="ghost"
               size="sm"
@@ -116,20 +155,21 @@ const Index = () => {
                 </>
               )}
             </Button>
-          )}
-          {total === 0 && <div />}
-          <PDFExport />
+            <PDFExport />
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Sections */}
-      <main className="container mx-auto px-4 py-6">
-        <div className="space-y-3">
-          {CURRENT_AFFAIRS_SECTIONS.map(section => (
-            <SectionAccordion key={section.id} section={section} />
-          ))}
-        </div>
-      </main>
+      {/* Sections - only show when not fetching */}
+      {!isBulkFetching && (
+        <main className="container mx-auto px-4 py-6">
+          <div className="space-y-3">
+            {CURRENT_AFFAIRS_SECTIONS.map(section => (
+              <SectionAccordion key={section.id} section={section} />
+            ))}
+          </div>
+        </main>
+      )}
 
       {/* Footer */}
       <footer className="border-t border-border/50 mt-12 py-6 bg-card/30">
