@@ -89,7 +89,33 @@ serve(async (req) => {
       );
     }
 
-    // Signature valid - create/update entitlement
+    // Signature valid - insert payment record (anti-replay)
+    const { error: paymentError } = await supabaseAdmin
+      .from("payments")
+      .insert({
+        user_id: user.id,
+        provider: 'razorpay',
+        order_id: razorpay_order_id,
+        payment_id: razorpay_payment_id,
+        signature: razorpay_signature,
+        amount: 9900, // ₹99 in paise
+        currency: 'INR',
+        status: 'paid',
+      });
+
+    if (paymentError) {
+      // Check if it's a duplicate (already processed)
+      if (paymentError.code === '23505') {
+        console.log("Payment already processed:", razorpay_payment_id);
+        return new Response(
+          JSON.stringify({ success: true, message: "Payment already processed" }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      console.error("Payment insert error:", paymentError);
+    }
+
+    // Create/update entitlement
     const validFrom = new Date();
     const validTo = new Date();
     validTo.setMonth(validTo.getMonth() + 1); // 1 month validity

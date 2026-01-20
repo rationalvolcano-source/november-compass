@@ -2,7 +2,22 @@ import { create } from 'zustand';
 import { supabase } from '@/integrations/supabase/client';
 import { CURRENT_AFFAIRS_SECTIONS } from '@/lib/categories';
 import { toast } from '@/hooks/use-toast';
-import type { NewsItem, CategoryNews, DraftItem, EnrichedItem, UserEntitlement, DailyUsage } from '@/types/news';
+import type { NewsItem, CategoryNews, UserEntitlement, DailyUsage } from '@/types/news';
+
+// Candidate from new architecture
+interface Candidate {
+  id: string;
+  year: number;
+  month: number;
+  section: string;
+  category: string;
+  title: string;
+  url: string | null;
+  source: string;
+  snippet: string | null;
+  published_at: string | null;
+  provider: 'rss' | 'gdelt' | 'serper';
+}
 
 // Helper function to convert month name to number
 const monthNameToNumber = (monthName: string): number => {
@@ -14,35 +29,33 @@ const monthNameToNumber = (monthName: string): number => {
   return months[monthName] || 1;
 };
 
-// Convert draft item to display NewsItem
-const draftToNewsItem = (
-  draft: DraftItem, 
+// Convert candidate to display NewsItem
+const candidateToNewsItem = (
+  candidate: Candidate, 
   sectionId: string, 
   categoryId: string,
-  enrichment?: EnrichedItem
 ): NewsItem => {
   return {
-    id: draft.id,
-    headline: draft.title,
-    date: draft.published_at 
-      ? new Date(draft.published_at).toLocaleDateString('en-IN', { 
+    id: candidate.id,
+    headline: candidate.title,
+    date: candidate.published_at 
+      ? new Date(candidate.published_at).toLocaleDateString('en-IN', { 
           day: 'numeric', month: 'short', year: 'numeric' 
         })
       : 'Date unknown',
-    description: enrichment?.summary || draft.snippet || '',
+    description: candidate.snippet || '',
     examHints: {
-      what: enrichment?.exam_points?.[0],
-      numbers: enrichment?.exam_points?.slice(1) || [],
+      what: undefined,
+      numbers: [],
     },
-    source: draft.source,
+    source: candidate.source,
     verified: false,
     selected: false,
     categoryId,
     sectionId,
-    draftId: draft.id,
-    url: draft.url || undefined,
-    enriched: !!enrichment,
-    enrichment,
+    draftId: candidate.id,
+    url: candidate.url || undefined,
+    enriched: false,
   };
 };
 
@@ -66,7 +79,9 @@ interface NewsStore {
   setMonth: (month: string) => void;
   setYear: (year: string) => void;
   initializeCategories: () => void;
-  fetchDraft: (categoryId: string) => Promise<void>;
+  fetchCandidates: (categoryId: string) => Promise<void>;
+  rerankCandidates: (categoryId: string) => Promise<void>;
+  fetchAndRerank: (categoryId: string) => Promise<void>;
   enrichSelected: (categoryId: string) => Promise<void>;
   bulkFetchDrafts: (categoryIds: string[]) => Promise<void>;
   toggleNewsSelection: (categoryId: string, newsId: string) => void;
@@ -84,6 +99,7 @@ interface NewsStore {
   
   // Legacy compatibility
   fetchNews: (categoryId: string) => Promise<void>;
+  fetchDraft: (categoryId: string) => Promise<void>;
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -121,24 +137,18 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     set({ categoryNews });
   },
 
-  fetchDraft: async (categoryId: string) => {
+  // Step 1: Fetch candidates from multiple sources
+  fetchCandidates: async (categoryId: string) => {
     const { month, year, categoryNews } = get();
     const category = categoryNews[categoryId];
     
     if (!category) return;
 
-    set({
-      categoryNews: {
-        ...categoryNews,
-        [categoryId]: { ...category, loading: true },
-      },
-    });
+    const monthNum = monthNameToNumber(month);
+    const yearNum = parseInt(year);
 
     try {
-      const monthNum = monthNameToNumber(month);
-      const yearNum = parseInt(year);
-
-      const { data, error } = await supabase.functions.invoke('fetch-draft', {
+      const { data, error } = await supabase.functions.invoke('fetch-candidates', {
         body: {
           section: category.sectionId,
           category: categoryId,
@@ -149,23 +159,40 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
 
       if (error) throw error;
 
-      const items: DraftItem[] = data?.items || [];
-      const newsItems = items.map(item => 
-        draftToNewsItem(item, category.sectionId, categoryId)
-      );
+      console.log(`Fetched candidates: ${data?.total || 0} (${data?.source})`);
+      return data;
+    } catch (error) {
+      console.error('Error fetching candidates:', error);
+      throw error;
+    }
+  },
 
-      const source = data?.source || 'unknown';
-      if (source === 'cache') {
-        toast({
-          title: "📦 Cached",
-          description: `Loaded ${newsItems.length} items from cache`,
-        });
-      } else {
-        toast({
-          title: "📰 Draft Built",
-          description: `Found ${newsItems.length} items from RSS feeds`,
-        });
-      }
+  // Step 2: Rerank candidates using Gemini
+  rerankCandidates: async (categoryId: string) => {
+    const { month, year, categoryNews } = get();
+    const category = categoryNews[categoryId];
+    
+    if (!category) return;
+
+    const monthNum = monthNameToNumber(month);
+    const yearNum = parseInt(year);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('rerank-candidates', {
+        body: {
+          section: category.sectionId,
+          category: categoryId,
+          month: monthNum,
+          year: yearNum,
+        },
+      });
+
+      if (error) throw error;
+
+      const items: Candidate[] = data?.items || [];
+      const newsItems = items.map(item => 
+        candidateToNewsItem(item, category.sectionId, categoryId)
+      );
 
       set({
         categoryNews: {
@@ -179,8 +206,44 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
         },
       });
 
+      return data;
     } catch (error) {
-      console.error('Error fetching draft:', error);
+      console.error('Error reranking candidates:', error);
+      throw error;
+    }
+  },
+
+  // Combined: Fetch candidates then rerank
+  fetchAndRerank: async (categoryId: string) => {
+    const { categoryNews } = get();
+    const category = categoryNews[categoryId];
+    
+    if (!category) return;
+
+    set({
+      categoryNews: {
+        ...categoryNews,
+        [categoryId]: { ...category, loading: true },
+      },
+    });
+
+    try {
+      // Step 1: Fetch candidates
+      await get().fetchCandidates(categoryId);
+      
+      // Step 2: Rerank
+      const result = await get().rerankCandidates(categoryId);
+
+      const source = result?.source || 'unknown';
+      const count = result?.selectedCount || 0;
+      
+      toast({
+        title: source === 'cache' ? "📦 Cached" : "✨ Curated",
+        description: `${count} exam-relevant items selected`,
+      });
+
+    } catch (error) {
+      console.error('Error in fetchAndRerank:', error);
       
       toast({
         title: "Fetch Failed",
@@ -239,22 +302,21 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
 
       if (error) throw error;
 
-      const enrichments: EnrichedItem[] = data?.enrichments || [];
+      const enrichments: Array<{ draft_id: string; summary: string; exam_points: string[] }> = data?.enrichments || [];
       const enrichmentMap = new Map(enrichments.map(e => [e.draft_id, e]));
 
       // Update news items with enrichments
-      const updatedNews = category.news.map(item => {
+      const updatedNews: NewsItem[] = category.news.map(item => {
         if (item.draftId && enrichmentMap.has(item.draftId)) {
           const enrichment = enrichmentMap.get(item.draftId)!;
           return {
             ...item,
-            description: enrichment.summary,
+            description: enrichment.summary || item.description,
             examHints: {
               what: enrichment.exam_points?.[0],
               numbers: enrichment.exam_points?.slice(1) || [],
             },
             enriched: true,
-            enrichment,
           };
         }
         return item;
@@ -279,11 +341,9 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     } catch (error) {
       console.error('Error enriching items:', error);
       
-      const errorMessage = error instanceof Error ? error.message : "Failed to enrich items";
-      
       toast({
         title: "Enrichment Failed",
-        description: errorMessage,
+        description: error instanceof Error ? error.message : "Failed to enrich items",
         variant: "destructive",
       });
 
@@ -308,7 +368,7 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     if (unfetched.length === 0) {
       toast({
         title: "All fetched",
-        description: "All categories already have drafts",
+        description: "All categories already have news",
       });
       return;
     }
@@ -330,11 +390,11 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
         },
       });
 
-      await get().fetchDraft(catId);
+      await get().fetchAndRerank(catId);
       
-      // Small delay between requests
+      // Delay between requests to avoid rate limits
       if (i < unfetched.length - 1) {
-        await sleep(500);
+        await sleep(1000);
       }
     }
 
@@ -345,13 +405,18 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
 
     toast({
       title: "✅ Bulk fetch complete",
-      description: `Fetched drafts for ${unfetched.length} categories`,
+      description: `Curated news for ${unfetched.length} categories`,
     });
   },
 
-  // Legacy compatibility - alias for fetchDraft
+  // Legacy compatibility - alias for fetchAndRerank
   fetchNews: async (categoryId: string) => {
-    return get().fetchDraft(categoryId);
+    return get().fetchAndRerank(categoryId);
+  },
+
+  // Legacy compatibility
+  fetchDraft: async (categoryId: string) => {
+    return get().fetchAndRerank(categoryId);
   },
 
   toggleNewsSelection: (categoryId: string, newsId: string) => {
@@ -502,13 +567,13 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
 
   getCategoryCounts: (categoryId: string) => {
     const { categoryNews } = get();
-    const category = categoryNews[categoryId];
+    const cat = categoryNews[categoryId];
     
-    if (!category) return { total: 0, selected: 0 };
+    if (!cat) return { total: 0, selected: 0 };
 
     return {
-      total: category.news.length,
-      selected: category.news.filter(n => n.selected).length,
+      total: cat.news.length,
+      selected: cat.news.filter(n => n.selected).length,
     };
   },
 
@@ -530,27 +595,29 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
   loadEntitlement: async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      
       if (!user) {
         set({ entitlement: { plan: 'free', export_enabled: false, enrich_quota_daily: 10 } });
         return;
       }
 
-      // Fetch entitlement using the database function
-      const { data } = await supabase.rpc('get_user_entitlement', { p_user_id: user.id });
-      
+      const { data, error } = await supabase.rpc('get_user_entitlement', {
+        p_user_id: user.id
+      });
+
+      if (error) {
+        console.error('Error loading entitlement:', error);
+        set({ entitlement: { plan: 'free', export_enabled: false, enrich_quota_daily: 10 } });
+        return;
+      }
+
       if (data && data.length > 0) {
-        set({
-          entitlement: {
-            plan: data[0].plan,
-            export_enabled: data[0].export_enabled,
-            enrich_quota_daily: data[0].enrich_quota_daily,
-          },
-        });
+        set({ entitlement: data[0] as UserEntitlement });
       } else {
         set({ entitlement: { plan: 'free', export_enabled: false, enrich_quota_daily: 10 } });
       }
     } catch (error) {
-      console.error('Error loading entitlement:', error);
+      console.error('Error in loadEntitlement:', error);
       set({ entitlement: { plan: 'free', export_enabled: false, enrich_quota_daily: 10 } });
     }
   },
