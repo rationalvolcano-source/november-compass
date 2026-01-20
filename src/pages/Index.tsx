@@ -91,7 +91,10 @@ const Index = () => {
             {/* GO Button */}
             <Button
               size="lg"
-              onClick={fetchAllNews}
+              onClick={() => {
+                // Avoid unhandled promise rejections from async click handlers
+                fetchAllNews().catch(() => {});
+              }}
               disabled={isBulkFetching}
               className="h-14 px-12 text-xl font-bold bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 neon-glow gap-3 transition-all hover:scale-105"
             >
