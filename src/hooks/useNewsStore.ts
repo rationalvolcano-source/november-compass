@@ -3,7 +3,7 @@ import { NewsItem, CategoryNews } from '@/types/news';
 import { CURRENT_AFFAIRS_SECTIONS } from '@/lib/categories';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from "@/hooks/use-toast";
-import { fetchNewsWithPuter, loadPuterSDK, isPuterAvailable } from '@/lib/puterAI';
+import { fetchNewsWithPuter, loadPuterSDK, ensurePuterLoaded } from '@/lib/puterAI';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -20,8 +20,10 @@ loadPuterSDK().catch(console.warn);
  * Falls back to edge function if Puter fails
  */
 async function fetchNewsWithFallback(params: { category: string; month: string; year: string }) {
-  // Try Puter.js first (free, unlimited)
-  if (isPuterAvailable()) {
+  // Try to ensure Puter is loaded, then use it
+  const puterReady = await ensurePuterLoaded();
+  
+  if (puterReady) {
     try {
       console.log('Fetching with Puter.js (free Perplexity AI)...');
       const result = await fetchNewsWithPuter(params.category, params.month, params.year);
@@ -29,6 +31,8 @@ async function fetchNewsWithFallback(params: { category: string; month: string; 
     } catch (puterError) {
       console.warn('Puter.js failed, falling back to edge function:', puterError);
     }
+  } else {
+    console.log('Puter SDK not available, using edge function...');
   }
 
   // Fallback to edge function with backoff
