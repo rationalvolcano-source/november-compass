@@ -16,6 +16,10 @@ interface NewsStore {
   deleteNewsItem: (categoryId: string, newsId: string) => void;
   getSelectedNews: () => NewsItem[];
   initializeCategories: () => void;
+  selectAllNews: (select: boolean) => void;
+  selectAllInSection: (sectionId: string, select: boolean) => void;
+  getTotalCounts: () => { total: number; selected: number };
+  getSectionCounts: (sectionId: string) => { total: number; selected: number };
 }
 
 export const useNewsStore = create<NewsStore>((set, get) => ({
@@ -193,5 +197,65 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     });
 
     return selectedNews;
+  },
+
+  selectAllNews: (select: boolean) => {
+    const { categoryNews } = get();
+    const updated: Record<string, CategoryNews> = {};
+
+    Object.entries(categoryNews).forEach(([key, category]) => {
+      updated[key] = {
+        ...category,
+        news: category.news.map(item => ({ ...item, selected: select })),
+      };
+    });
+
+    set({ categoryNews: updated });
+  },
+
+  selectAllInSection: (sectionId: string, select: boolean) => {
+    const { categoryNews } = get();
+    const updated: Record<string, CategoryNews> = {};
+
+    Object.entries(categoryNews).forEach(([key, category]) => {
+      if (category.sectionId === sectionId) {
+        updated[key] = {
+          ...category,
+          news: category.news.map(item => ({ ...item, selected: select })),
+        };
+      } else {
+        updated[key] = category;
+      }
+    });
+
+    set({ categoryNews: updated });
+  },
+
+  getTotalCounts: () => {
+    const { categoryNews } = get();
+    let total = 0;
+    let selected = 0;
+
+    Object.values(categoryNews).forEach(category => {
+      total += category.news.length;
+      selected += category.news.filter(n => n.selected).length;
+    });
+
+    return { total, selected };
+  },
+
+  getSectionCounts: (sectionId: string) => {
+    const { categoryNews } = get();
+    let total = 0;
+    let selected = 0;
+
+    Object.values(categoryNews).forEach(category => {
+      if (category.sectionId === sectionId) {
+        total += category.news.length;
+        selected += category.news.filter(n => n.selected).length;
+      }
+    });
+
+    return { total, selected };
   },
 }));

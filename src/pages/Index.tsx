@@ -1,11 +1,12 @@
 import { useEffect } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { CURRENT_AFFAIRS_SECTIONS } from "@/lib/categories";
 import { SectionAccordion } from "@/components/SectionAccordion";
 import { PDFExport } from "@/components/PDFExport";
 import { useNewsStore } from "@/hooks/useNewsStore";
-import { FileText, Zap } from "lucide-react";
+import { FileText, Zap, CheckSquare, Square } from "lucide-react";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -15,13 +16,14 @@ const MONTHS = [
 const YEARS = ["2024", "2025", "2026"];
 
 const Index = () => {
-  const { month, year, setMonth, setYear, initializeCategories, getSelectedNews } = useNewsStore();
+  const { month, year, setMonth, setYear, initializeCategories, getSelectedNews, selectAllNews, getTotalCounts } = useNewsStore();
   
   useEffect(() => {
     initializeCategories();
   }, [initializeCategories]);
 
-  const selectedCount = getSelectedNews().length;
+  const { total, selected: selectedCount } = getTotalCounts();
+  const allSelected = total > 0 && selectedCount === total;
 
   return (
     <div className="min-h-screen bg-background">
@@ -94,7 +96,28 @@ const Index = () => {
 
       {/* Export Bar */}
       <div className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-md">
-        <div className="container mx-auto px-4 py-3 flex justify-end">
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
+          {total > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => selectAllNews(!allSelected)}
+              className="gap-2 text-muted-foreground hover:text-primary"
+            >
+              {allSelected ? (
+                <>
+                  <CheckSquare className="h-4 w-4" />
+                  Unselect All ({selectedCount})
+                </>
+              ) : (
+                <>
+                  <Square className="h-4 w-4" />
+                  Select All ({total})
+                </>
+              )}
+            </Button>
+          )}
+          {total === 0 && <div />}
           <PDFExport />
         </div>
       </div>
