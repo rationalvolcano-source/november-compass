@@ -127,7 +127,7 @@ const Index = () => {
             <BulkFetchLoader 
               totalCategories={bulkFetchProgress.total}
               fetchedCount={bulkFetchProgress.fetched}
-              currentCategory={bulkFetchProgress.currentCategory}
+              activeCategories={bulkFetchProgress.activeCategories}
             />
           </div>
         </div>

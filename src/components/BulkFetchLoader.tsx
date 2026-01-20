@@ -16,10 +16,10 @@ const LOADING_MESSAGES = [
 interface BulkFetchLoaderProps {
   totalCategories: number;
   fetchedCount: number;
-  currentCategory?: string;
+  activeCategories?: string[];
 }
 
-export const BulkFetchLoader = ({ totalCategories, fetchedCount, currentCategory }: BulkFetchLoaderProps) => {
+export const BulkFetchLoader = ({ totalCategories, fetchedCount, activeCategories = [] }: BulkFetchLoaderProps) => {
   const [messageIndex, setMessageIndex] = useState(0);
 
   useEffect(() => {
@@ -51,7 +51,7 @@ export const BulkFetchLoader = ({ totalCategories, fetchedCount, currentCategory
       {/* Progress indicator */}
       <div className="w-full max-w-md mb-6">
         <div className="flex justify-between text-sm text-muted-foreground mb-2">
-          <span>Fetching news...</span>
+          <span>Fetching news in parallel...</span>
           <span className="text-primary font-semibold">{fetchedCount} / {totalCategories}</span>
         </div>
         <div className="h-2 bg-muted rounded-full overflow-hidden">
@@ -62,11 +62,18 @@ export const BulkFetchLoader = ({ totalCategories, fetchedCount, currentCategory
         </div>
       </div>
 
-      {/* Current category */}
-      {currentCategory && (
-        <p className="text-sm text-primary/80 mb-4 animate-pulse">
-          Currently: <span className="font-semibold">{currentCategory}</span>
-        </p>
+      {/* Active categories - show multiple */}
+      {activeCategories.length > 0 && (
+        <div className="mb-4 flex flex-wrap gap-2 justify-center max-w-lg">
+          {activeCategories.slice(0, 5).map((category, idx) => (
+            <span 
+              key={idx} 
+              className="text-xs px-3 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 animate-pulse"
+            >
+              {category}
+            </span>
+          ))}
+        </div>
       )}
 
       {/* Rotating messages */}
@@ -80,8 +87,8 @@ export const BulkFetchLoader = ({ totalCategories, fetchedCount, currentCategory
       {/* Fun fact */}
       <div className="mt-8 max-w-lg text-center">
         <p className="text-xs text-muted-foreground/70">
-          💡 This fetches news from <span className="text-primary">{totalCategories} categories</span> across{" "}
-          multiple sections. Sit back while we curate exam-relevant current affairs for you!
+          ⚡ <span className="text-primary">Parallel fetching enabled!</span> Fetching up to 5 categories simultaneously
+          for faster results across <span className="text-primary">{totalCategories} categories</span>.
         </p>
       </div>
     </div>

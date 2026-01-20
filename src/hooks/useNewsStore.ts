@@ -8,7 +8,7 @@ interface NewsStore {
   year: string;
   categoryNews: Record<string, CategoryNews>;
   isBulkFetching: boolean;
-  bulkFetchProgress: { total: number; fetched: number; currentCategory: string };
+  bulkFetchProgress: { total: number; fetched: number; activeCategories: string[] };
   setMonth: (month: string) => void;
   setYear: (year: string) => void;
   fetchNews: (categoryId: string) => Promise<void>;
@@ -30,7 +30,7 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
   year: '2025',
   categoryNews: {},
   isBulkFetching: false,
-  bulkFetchProgress: { total: 0, fetched: 0, currentCategory: '' },
+  bulkFetchProgress: { total: 0, fetched: 0, activeCategories: [] },
 
   setMonth: (month) => set({ month }),
   setYear: (year) => set({ year }),
@@ -127,26 +127,26 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
     const { categoryNews, month, year } = get();
     const categoryIds = Object.keys(categoryNews);
     const totalCategories = categoryIds.length;
+    const CONCURRENCY = 5; // Number of parallel fetches
 
     set({
       isBulkFetching: true,
-      bulkFetchProgress: { total: totalCategories, fetched: 0, currentCategory: '' },
+      bulkFetchProgress: { total: totalCategories, fetched: 0, activeCategories: [] },
     });
 
-    for (let i = 0; i < categoryIds.length; i++) {
-      const categoryId = categoryIds[i];
-      const category = categoryNews[categoryId];
+    let fetchedCount = 0;
 
+    // Helper to fetch a single category
+    const fetchCategory = async (categoryId: string) => {
+      const category = get().categoryNews[categoryId];
+      if (!category) return;
+
+      // Add to active categories
       set({
-        bulkFetchProgress: { 
-          total: totalCategories, 
-          fetched: i, 
-          currentCategory: category?.categoryName || '' 
+        bulkFetchProgress: {
+          ...get().bulkFetchProgress,
+          activeCategories: [...get().bulkFetchProgress.activeCategories, category.categoryName],
         },
-      });
-
-      // Update loading state for this category
-      set({
         categoryNews: {
           ...get().categoryNews,
           [categoryId]: { ...get().categoryNews[categoryId], loading: true },
@@ -155,11 +155,7 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
 
       try {
         const { data, error } = await supabase.functions.invoke('fetch-news', {
-          body: { 
-            category: category?.categoryName, 
-            month, 
-            year 
-          },
+          body: { category: category.categoryName, month, year },
         });
 
         if (error) throw error;
@@ -183,7 +179,7 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
           verified: false,
           selected: false,
           categoryId,
-          sectionId: category?.sectionId || '',
+          sectionId: category.sectionId,
         }));
 
         set({
@@ -202,19 +198,33 @@ export const useNewsStore = create<NewsStore>((set, get) => ({
         set({
           categoryNews: {
             ...get().categoryNews,
-            [categoryId]: { 
-              ...get().categoryNews[categoryId], 
-              loading: false, 
-              fetched: true 
-            },
+            [categoryId]: { ...get().categoryNews[categoryId], loading: false, fetched: true },
+          },
+        });
+      } finally {
+        fetchedCount++;
+        const currentActive = get().bulkFetchProgress.activeCategories.filter(
+          (name) => name !== category.categoryName
+        );
+        set({
+          bulkFetchProgress: {
+            total: totalCategories,
+            fetched: fetchedCount,
+            activeCategories: currentActive,
           },
         });
       }
+    };
+
+    // Process in batches with concurrency limit
+    for (let i = 0; i < categoryIds.length; i += CONCURRENCY) {
+      const batch = categoryIds.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map(fetchCategory));
     }
 
     set({
       isBulkFetching: false,
-      bulkFetchProgress: { total: totalCategories, fetched: totalCategories, currentCategory: '' },
+      bulkFetchProgress: { total: totalCategories, fetched: totalCategories, activeCategories: [] },
     });
   },
 
